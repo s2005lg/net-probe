@@ -1,0 +1,16 @@
+[Unit]
+Description=net-probe-panel
+After=network-online.target
+
+[Service]
+Type=simple
+User=net-probe-panel
+EnvironmentFile=-/etc/net-probe-panel/panel.env
+ExecStart=/usr/local/bin/net-probe-panel --config /etc/net-probe-panel/config.toml
+Restart=on-failure
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/net-probe-panel /etc/net-probe-panel
+
+[Install]
+WantedBy=multi-user.target
