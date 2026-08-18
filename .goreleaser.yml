@@ -1,0 +1,8 @@
+builds:
+  - id: net-probe
+    main: ./cmd/net-probe
+    goos: [linux]
+    goarch: [amd64, arm64]
+    ldflags: -s -w
+archives:
+  - format: binary
