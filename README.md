@@ -17,21 +17,50 @@ panel or webhook sink.
 
 ## One-line install
 
-Clone the repository, change into it, and run the installer with root:
+Install the latest release directly from GitHub:
 
 ```bash
-git clone --depth 1 https://github.com/s2005lg/net-probe.git && cd net-probe && sudo ./install.sh
+curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install.sh | sudo bash
 ```
 
-You can select a specific release:
+Install a specific release:
 
 ```bash
-sudo NET_PROBE_VERSION=v0.1.0 ./install.sh
+curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install.sh | \
+  sudo NET_PROBE_VERSION=v0.1.0 bash
 ```
 
-The installer writes the binary to `/usr/local/bin/net-probe`, creates a sample
-config at `/etc/net-probe/config.toml`, and enables the
-`net-probe.timer` systemd unit.
+Configure a panel sink during installation (optional). The token is written to
+`/etc/net-probe/panel-token` with mode `0600`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install.sh | \
+  sudo NET_PROBE_PANEL_URL="https://panel.example.com" \
+       NET_PROBE_PANEL_TOKEN="your-token" bash
+```
+
+If no panel URL is provided, the installer writes a placeholder webhook config
+to `/etc/net-probe/config.toml` for you to edit.
+
+The installer:
+
+- writes the binary to `/usr/local/bin/net-probe`
+- creates the `net-probe` system user
+- writes the config to `/etc/net-probe/config.toml`
+- installs and enables the `net-probe.timer` systemd unit
+- runs the agent every 1 minute by default
+
+## One-line uninstall
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/uninstall.sh | sudo bash
+```
+
+This stops and disables the timer, removes the binary, config directory,
+systemd units, and the `net-probe` system user, leaving no residue.
+
+> A one-line installer for the panel is planned and will be documented here
+> when it is available.
 
 ## Minimal configuration
 
