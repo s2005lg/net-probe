@@ -19,7 +19,7 @@ func TestAggregate(t *testing.T) {
 		t.Fatalf("migrate: %v", err)
 	}
 
-	old := time.Now().AddDate(0, 0, -8).Unix()
+	old := time.Now().Truncate(time.Hour).AddDate(0, 0, -8).Unix()
 	for _, ts := range []int64{old, old + 1800} {
 		if _, err := d.Exec(`INSERT INTO metrics(node_id,ts,granularity,load1,load5,load15,mem_used_pct,disk_used_pct,services_json)
 			VALUES('n1',?,'raw',0.1,0.2,0.3,12,20,'[]')`, ts); err != nil {
