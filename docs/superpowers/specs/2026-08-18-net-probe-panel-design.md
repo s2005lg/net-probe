@@ -157,6 +157,12 @@ Agent 侧按 `stats_kind` 采集并写入 `service.stats`：
 Panel 的数据契约：每个服务可带 `stats: {tx, rx, online_clients}`；
 Panel 负责存储、展示与趋势图，采集由 Agent 实现。
 
+统计端点与 secret 的获取方式（傻瓜式优先）：
+
+1. 优先从各服务自身配置文件自动解析（Hysteria2/sing-box）；
+2. 用户可在 Agent 配置 `[stats].services.<type>` 显式覆盖；
+3. 两者都拿不到时不采集，`stats` 留空，不影响主流程。
+
 ## 7. 认证与安全
 
 - v1 单管理员密码登录（bcrypt 密码哈希），无 2FA、无 SSH Key 登录；
@@ -234,6 +240,7 @@ Panel 负责存储、展示与趋势图，采集由 Agent 实现。
 以下改动属于 Agent，但由 Panel 设计引出：
 
 - 增加 `service.stats`（tx/rx/online_clients）采集，覆盖 Hysteria2/Xray/sing-box；
+  统计端点优先从服务配置自动解析，`[stats]` 作为用户覆盖；
 - panel sink 增加 `tls_skip_verify`（或 `tls_ca_file`）以信任自签证书；
 - 上报响应已预留 `commands`，二期实现命令通道。
 

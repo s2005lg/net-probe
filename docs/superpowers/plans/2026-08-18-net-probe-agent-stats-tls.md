@@ -534,59 +534,139 @@ git commit -m "feat: add xray stats collector via cli"
 
 ---
 
-## Task 7: 在检测编排中接入统计
+## Task 7: 统计端点自动发现与编排接入
 
 **Files:**
-- Modify: `internal/detect/detect.go`
-- Modify: `internal/detect/detect_test.go`
+- Modify: `internal/detect/template.go`（新增 `StatsConfigPaths`）
+- Modify: `internal/detect/builtin/hysteria2.yaml`、`sing-box.yaml`、`xray.yaml`（新增 `stats_config_paths`）
+- Modify: `internal/detect/stats.go`（新增 `discoverStats`）
+- Modify: `internal/detect/detect.go`（接入统计，优先用户覆盖，其次自动发现）
+- Modify: `internal/detect/detect_test.go`、`internal/detect/stats_test.go`
 
 **Interfaces:**
-- Consumes: `config.StatsConfig`、`CollectStatsWithRunner`
+- Consumes: `config.StatsConfig`、`CollectStatsWithRunner`、`Template.StatsConfigPaths`
+- Produces: `detect.discoverStats(tmpl Template) (StatsEndpoint, bool)`、`detect.statsEndpointFor(tmpl, statsCfg) (endpoint, secret string, ok bool)`
 
 - [ ] **Step 1: 写失败测试**
 
 ```go
-func TestDetectStats(t *testing.T) {
-	reg, _ := NewRegistry([]Template{{ID: "hysteria2", Units: []string{"hysteria-server"}, StatsKind: "hysteria2"}})
-	r := fakeRunner{out: map[string]string{
-		"systemctl list-unit-files --type=service --no-legend --no-pager": "hysteria-server.service enabled\n",
-		"systemctl show hysteria-server --property=ActiveState,SubState,UnitFileState,NRestarts,MainPID,ExecStart": "ActiveState=active\nUnitFileState=enabled\nMainPID=10\nExecStart={ path=/usr/local/bin/hysteria }",
-	}}
-	cfg := config.DetectConfig{}
-	statsCfg := config.StatsConfig{Services: map[string]config.StatsService{"hysteria2": {Endpoint: "http://127.0.0.1:1"}}}
-	// 指向未监听端口时 stats 应置空但检测不报错
-	svcs, err := Detect(context.Background(), reg, cfg, Deps{Runner: r, ProcRoot: "/nonexistent"}, statsCfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(svcs) != 1 || svcs[0].Stats != nil {
-		t.Fatalf("svcs = %+v", svcs)
+func TestDiscoverStats(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "hysteria.yaml")
+	_ = os.WriteFile(cfg, []byte("trafficStats:\n  listen: 127.0.0.1:9999\n  secret: abc\n"), 0o600)
+	tmpl := Template{StatsKind: "hysteria2", StatsConfigPaths: []string{cfg}}
+	ep, ok := discoverStats(tmpl)
+	if !ok || ep.Endpoint != "127.0.0.1:9999" || ep.Secret != "abc" {
+		t.Fatalf("ep=%+v ok=%v", ep, ok)
 	}
 }
 ```
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `go test ./internal/detect -run TestDetectStats`
-Expected: FAIL（`Detect` 签名未变）
+Run: `go test ./internal/detect -run TestDiscoverStats`
+Expected: FAIL（`discoverStats` 未定义）
 
-- [ ] **Step 3: 接入统计**
+- [ ] **Step 3: 实现自动发现与接入**
 
-`Detect` 增加参数 `statsCfg config.StatsConfig`：
+`internal/detect/template.go` 的 `Template` 增加：
 
 ```go
-func Detect(ctx context.Context, reg *Registry, cfg config.DetectConfig, deps Deps, statsCfg config.StatsConfig) ([]report.Service, error) {
-	...
-	if sc, ok := statsCfg.Services[tmpl.StatsKind]; ok && sc.Endpoint != "" {
-		if st, err := CollectStatsWithRunner(ctx, tmpl.StatsKind, sc.Endpoint, sc.Secret, deps.Runner); err == nil {
-			svc.Stats = st
+StatsConfigPaths []string `yaml:"stats_config_paths"`
+```
+
+`internal/detect/builtin/hysteria2.yaml` 增加：
+
+```yaml
+stats_config_paths: ["/etc/hysteria/config.yaml", "/etc/hysteria/config.yml"]
+```
+
+`sing-box.yaml` 增加：
+
+```yaml
+stats_config_paths: ["/etc/sing-box/config.json", "/etc/sing-box/config.yaml"]
+```
+
+`xray.yaml` 增加：
+
+```yaml
+stats_config_paths: ["/usr/local/etc/xray/config.json", "/etc/xray/config.json"]
+```
+
+`internal/detect/stats.go` 新增：
+
+```go
+type StatsEndpoint struct {
+	Endpoint string
+	Secret   string
+}
+
+func discoverStats(tmpl Template) (StatsEndpoint, bool) {
+	for _, p := range tmpl.StatsConfigPaths {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		var m map[string]any
+		if err := yaml.Unmarshal(b, &m); err != nil {
+			continue
+		}
+		switch tmpl.StatsKind {
+		case "hysteria2":
+			ts, _ := m["trafficStats"].(map[string]any)
+			if ts == nil {
+				continue
+			}
+			listen, _ := ts["listen"].(string)
+			secret, _ := ts["secret"].(string)
+			if listen != "" {
+				return StatsEndpoint{Endpoint: listen, Secret: secret}, true
+			}
+		case "sing-box":
+			exp, _ := m["experimental"].(map[string]any)
+			if exp == nil {
+				continue
+			}
+			clash, _ := exp["clash_api"].(map[string]any)
+			if clash == nil {
+				continue
+			}
+			ctrl, _ := clash["external_controller"].(string)
+			secret, _ := clash["secret"].(string)
+			if ctrl != "" {
+				return StatsEndpoint{Endpoint: ctrl, Secret: secret}, true
+			}
 		}
 	}
-	...
+	return StatsEndpoint{}, false
 }
 ```
 
-同步更新已有调用点（`internal/agent/run.go` 的 `Build` 传入 `cfg.Stats`，测试传入空配置）。
+（`stats.go` import 增加 `os`、`gopkg.in/yaml.v3`。）
+
+`internal/detect/detect.go` 的 `Detect` 增加 `statsCfg config.StatsConfig` 参数，并在服务构建处接入：
+
+```go
+if tmpl.StatsKind != "" {
+	if endpoint, secret, ok := statsEndpointFor(tmpl, statsCfg); ok {
+		if st, err := CollectStatsWithRunner(ctx, tmpl.StatsKind, endpoint, secret, deps.Runner); err == nil {
+			svc.Stats = st
+		}
+	}
+}
+
+func statsEndpointFor(tmpl Template, statsCfg config.StatsConfig) (string, string, bool) {
+	if sc, ok := statsCfg.Services[tmpl.StatsKind]; ok && sc.Endpoint != "" {
+		return sc.Endpoint, sc.Secret, true
+	}
+	if ep, ok := discoverStats(tmpl); ok {
+		return ep.Endpoint, ep.Secret, true
+	}
+	return "", "", false
+}
+```
+
+同步更新调用点：`internal/agent/run.go` 的 `Build` 传入 `cfg.Stats`，其余测试传入空 `config.StatsConfig{}`。
 
 - [ ] **Step 4: 运行测试确认通过**
 
@@ -596,14 +676,14 @@ Expected: PASS
 - [ ] **Step 5: 提交**
 
 ```bash
-git add internal/detect/detect.go internal/detect/detect_test.go internal/agent/run.go
-git commit -m "feat: integrate stats collection into detection"
+git add internal/detect/template.go internal/detect/builtin/*.yaml internal/detect/stats.go internal/detect/stats_test.go internal/detect/detect.go internal/detect/detect_test.go internal/agent/run.go
+git commit -m "feat: auto-discover stats endpoints and integrate stats collection"
 ```
 
 ---
 
 ## Self-Review 记录
 
-- 覆盖：`report.Stats.online_clients`、`[stats]` 配置、sink TLS 信任、Hysteria2/sing-box/Xray 统计、检测编排接入均映射到任务。
-- 类型一致性：`CollectStats` / `CollectStatsWithRunner` 在 Task 4/6 定义，Task 7 使用；`config.StatsConfig` 在 Task 2 定义，Task 7 使用。
-- 注意：Xray 的 CLI 输出格式以实际 `xray api stats query` 为准，实现时若字段名不同需按真实输出调整解析器。
+- 覆盖：`report.Stats.online_clients`、`[stats]` 用户覆盖、sink TLS 信任、统计端点自动发现（Hysteria2/sing-box）、Hysteria2/sing-box/Xray 采集、编排接入均映射到任务。
+- 类型一致性：`CollectStats` / `CollectStatsWithRunner` 在 Task 4/6 定义，Task 7 使用；`config.StatsConfig` 在 Task 2 定义；`Template.StatsConfigPaths` 在 Task 7 定义并写入内置 YAML。
+- 注意：Xray 的 CLI 输出格式以实际 `xray api stats query` 为准；Xray 端点首版主要靠 `[stats]` 覆盖，自动解析以后补充。
