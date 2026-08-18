@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"runtime"
 	"strconv"
@@ -72,20 +73,28 @@ func ParseOSRelease(s string) (name, version string) {
 }
 
 func ParseDf(s string) (float64, error) {
+	_, _, pct, err := ParseDfFull(s)
+	return pct, err
+}
+
+func ParseDfFull(s string) (total, used uint64, pct float64, err error) {
 	lines := strings.Split(strings.TrimSpace(s), "\n")
 	if len(lines) < 2 {
-		return 0, fmt.Errorf("bad df output")
+		return 0, 0, 0, fmt.Errorf("bad df output")
 	}
 	f := strings.Fields(lines[1])
 	if len(f) < 3 {
-		return 0, fmt.Errorf("bad df line")
+		return 0, 0, 0, fmt.Errorf("bad df line")
 	}
 	total, err1 := strconv.ParseUint(f[1], 10, 64)
-	used, err2 := strconv.ParseUint(f[2], 10, 64)
+	usedBlocks, err2 := strconv.ParseUint(f[2], 10, 64)
 	if err1 != nil || err2 != nil || total == 0 {
-		return 0, fmt.Errorf("bad df numbers")
+		return 0, 0, 0, fmt.Errorf("bad df numbers")
 	}
-	return float64(used) / float64(total) * 100, nil
+	total *= 1024
+	used = usedBlocks * 1024
+	pct = float64(used) / float64(total) * 100
+	return total, used, pct, nil
 }
 
 func Host(ctx context.Context, cfg config.CollectConfig, runner detect.Runner) (report.Host, error) {
@@ -93,6 +102,7 @@ func Host(ctx context.Context, cfg config.CollectConfig, runner detect.Runner) (
 	if hn, err := os.Hostname(); err == nil {
 		h.Hostname = hn
 	}
+	h.IPv4, h.IPv6 = hostIPs()
 	if b, err := os.ReadFile("/etc/os-release"); err == nil {
 		h.OS, h.OSVersion = ParseOSRelease(string(b))
 	}
@@ -114,13 +124,49 @@ func Host(ctx context.Context, cfg config.CollectConfig, runner detect.Runner) (
 	}
 	if len(cfg.DiskMounts) > 0 && runner != nil {
 		if out, err := runner.Run(ctx, "df", "-P", cfg.DiskMounts[0]); err == nil {
-			h.DiskUsedPct, _ = ParseDf(out)
+			if total, used, pct, err := ParseDfFull(out); err == nil {
+				h.DiskTotalBytes, h.DiskUsedBytes, h.DiskUsedPct = total, used, pct
+			}
 		}
 	}
 	if cfg.Upgradable && runner != nil {
 		h.UpgradableCount = upgradableCount(ctx, runner)
 	}
 	return h, nil
+}
+
+func hostIPs() (ipv4, ipv6 string) {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return "", ""
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			ipNet, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ip := ipNet.IP
+			if ip.IsLoopback() {
+				continue
+			}
+			if ip.To4() != nil {
+				if ipv4 == "" {
+					ipv4 = ip.String()
+				}
+			} else if ipv6 == "" && !ip.IsLinkLocalUnicast() {
+				ipv6 = ip.String()
+			}
+		}
+	}
+	return ipv4, ipv6
 }
 
 func upgradableCount(ctx context.Context, runner detect.Runner) int {

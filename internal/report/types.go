@@ -6,6 +6,8 @@ type Host struct {
 	OSVersion         string  `json:"os_version"`
 	Kernel            string  `json:"kernel"`
 	Arch              string  `json:"arch"`
+	IPv4              string  `json:"ipv4,omitempty"`
+	IPv6              string  `json:"ipv6,omitempty"`
 	UptimeSeconds     int64   `json:"uptime_seconds"`
 	Load1             float64 `json:"load1"`
 	Load5             float64 `json:"load5"`
@@ -13,6 +15,8 @@ type Host struct {
 	MemTotalBytes     uint64  `json:"mem_total_bytes"`
 	MemAvailableBytes uint64  `json:"mem_available_bytes"`
 	MemUsedPct        float64 `json:"mem_used_pct"`
+	DiskTotalBytes    uint64  `json:"disk_total_bytes,omitempty"`
+	DiskUsedBytes     uint64  `json:"disk_used_bytes,omitempty"`
 	DiskUsedPct       float64 `json:"disk_used_pct"`
 	UpgradableCount   int     `json:"upgradable_count"`
 }

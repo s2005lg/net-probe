@@ -32,6 +32,16 @@ func TestParseDf(t *testing.T) {
 	}
 }
 
+func TestParseDfFull(t *testing.T) {
+	total, used, pct, err := ParseDfFull("Filesystem 1024-blocks Used Available Capacity Mounted on\noverlay 1000 600 400 60% /\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1000*1024 || used != 600*1024 || pct != 60.0 {
+		t.Fatalf("total=%d used=%d pct=%v", total, used, pct)
+	}
+}
+
 func TestParseOSRelease(t *testing.T) {
 	name, version := ParseOSRelease("PRETTY_NAME=\"Debian GNU/Linux 11 (bullseye)\"\nVERSION_ID=\"11\"\n")
 	if name != "Debian GNU/Linux 11 (bullseye)" || version != "11" {
