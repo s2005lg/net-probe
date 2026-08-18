@@ -64,15 +64,29 @@ func splitAddrPort(s string) (string, uint16, error) {
 }
 
 func hexIP(hex string) string {
-	if len(hex) != 8 {
-		return hex
+	switch len(hex) {
+	case 8:
+		parts := make([]string, 0, 4)
+		for i := 0; i < 8; i += 2 {
+			b, _ := strconv.ParseUint(hex[i:i+2], 16, 8)
+			parts = append(parts, strconv.FormatUint(b, 10))
+		}
+		return strings.Join(parts, ".")
+	case 32:
+		if isAllZero(hex) {
+			return "::"
+		}
 	}
-	parts := make([]string, 0, 4)
-	for i := 0; i < 8; i += 2 {
-		b, _ := strconv.ParseUint(hex[i:i+2], 16, 8)
-		parts = append(parts, strconv.FormatUint(b, 10))
+	return hex
+}
+
+func isAllZero(s string) bool {
+	for _, r := range s {
+		if r != '0' {
+			return false
+		}
 	}
-	return strings.Join(parts, ".")
+	return true
 }
 
 func ListenForPID(procRoot string, pid int, socks []Socket) []report.Listen {

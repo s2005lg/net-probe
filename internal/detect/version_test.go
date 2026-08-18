@@ -13,7 +13,7 @@ func TestVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v != "Version: v2.9.0" {
+	if v != "v2.9.0" {
 		t.Fatalf("version = %q", v)
 	}
 }

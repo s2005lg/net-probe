@@ -54,6 +54,23 @@ func ParseUptime(s string) (int64, error) {
 	return int64(u), err
 }
 
+func ParseOSRelease(s string) (name, version string) {
+	for _, line := range strings.Split(s, "\n") {
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		v = strings.Trim(strings.TrimSpace(v), `"`)
+		switch k {
+		case "PRETTY_NAME":
+			name = v
+		case "VERSION_ID":
+			version = v
+		}
+	}
+	return name, version
+}
+
 func ParseDf(s string) (float64, error) {
 	lines := strings.Split(strings.TrimSpace(s), "\n")
 	if len(lines) < 2 {
@@ -75,6 +92,12 @@ func Host(ctx context.Context, cfg config.CollectConfig, runner detect.Runner) (
 	h := report.Host{Arch: runtime.GOARCH}
 	if hn, err := os.Hostname(); err == nil {
 		h.Hostname = hn
+	}
+	if b, err := os.ReadFile("/etc/os-release"); err == nil {
+		h.OS, h.OSVersion = ParseOSRelease(string(b))
+	}
+	if b, err := os.ReadFile("/proc/sys/kernel/osrelease"); err == nil {
+		h.Kernel = strings.TrimSpace(string(b))
 	}
 	if b, err := os.ReadFile("/proc/loadavg"); err == nil {
 		h.Load1, h.Load5, h.Load15, _ = ParseLoadavg(string(b))

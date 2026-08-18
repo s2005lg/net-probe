@@ -56,3 +56,12 @@ func TestListenForPID(t *testing.T) {
 		t.Fatalf("got[1] = %+v", got[1])
 	}
 }
+
+func TestHexIP(t *testing.T) {
+	if got := hexIP("00000000"); got != "0.0.0.0" {
+		t.Fatalf("ipv4 = %q", got)
+	}
+	if got := hexIP("00000000000000000000000000000000"); got != "::" {
+		t.Fatalf("ipv6 wildcard = %q", got)
+	}
+}

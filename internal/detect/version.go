@@ -13,5 +13,16 @@ func Version(ctx context.Context, r Runner, binary string, args []string) (strin
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(out), nil
+	return parseVersion(out), nil
+}
+
+func parseVersion(out string) string {
+	out = strings.TrimSpace(out)
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "Version:") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "Version:"))
+		}
+	}
+	return out
 }

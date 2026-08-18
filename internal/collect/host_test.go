@@ -31,3 +31,10 @@ func TestParseDf(t *testing.T) {
 		t.Fatalf("pct = %v", pct)
 	}
 }
+
+func TestParseOSRelease(t *testing.T) {
+	name, version := ParseOSRelease("PRETTY_NAME=\"Debian GNU/Linux 11 (bullseye)\"\nVERSION_ID=\"11\"\n")
+	if name != "Debian GNU/Linux 11 (bullseye)" || version != "11" {
+		t.Fatalf("os = %q %q", name, version)
+	}
+}
