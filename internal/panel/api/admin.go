@@ -4,9 +4,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/s2005lg/net-probe/internal/panel/auth"
+	"github.com/s2005lg/net-probe/internal/report"
 )
 
 type nodeRow struct {
@@ -16,6 +18,7 @@ type nodeRow struct {
 	LastReportAt int64           `json:"last_report_at"`
 	Host         json.RawMessage `json:"host"`
 	Services     json.RawMessage `json:"services"`
+	Status       string          `json:"status"`
 }
 
 const nodeSelect = `SELECT node_id, COALESCE(alias,''), COALESCE(muted_until,0), COALESCE(last_report_at,0), COALESCE(last_host_json,'{}'), COALESCE(last_services_json,'[]') FROM nodes`
@@ -39,6 +42,20 @@ func scanNode(scanner interface{ Scan(...any) error }) (nodeRow, error) {
 	return n, err
 }
 
+func (s *Server) nodeTimeout() time.Duration {
+	if d, err := time.ParseDuration(s.cfg.NodeTimeout); err == nil && d > 0 {
+		return d
+	}
+	return 3 * time.Minute
+}
+
+func nodeStatus(lastAt int64, timeout time.Duration) string {
+	if lastAt == 0 || lastAt < time.Now().Add(-timeout).Unix() {
+		return "offline"
+	}
+	return "online"
+}
+
 func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.db.Query(nodeSelect + ` ORDER BY COALESCE(last_report_at,0) DESC`)
 	if err != nil {
@@ -48,12 +65,14 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	out := make([]nodeRow, 0)
+	timeout := s.nodeTimeout()
 	for rows.Next() {
 		n, err := scanNode(rows)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
 			return
 		}
+		n.Status = nodeStatus(n.LastReportAt, timeout)
 		out = append(out, n)
 	}
 	if err := rows.Err(); err != nil {
@@ -75,6 +94,7 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": map[string]any{"code": "not_found"}})
 		return
 	}
+	n.Status = nodeStatus(n.LastReportAt, s.nodeTimeout())
 	writeJSON(w, http.StatusOK, n)
 }
 
@@ -215,6 +235,185 @@ func (s *Server) handleVersions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+type serviceDist struct {
+	Type  string `json:"type"`
+	Count int    `json:"count"`
+}
+
+func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
+	timeout := s.nodeTimeout()
+	cutoff := time.Now().Add(-timeout).Unix()
+
+	var nodesTotal, nodesOnline, alertsActive int
+	if err := s.db.QueryRow(`SELECT count(*) FROM nodes`).Scan(&nodesTotal); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
+		return
+	}
+	if err := s.db.QueryRow(`SELECT count(*) FROM nodes WHERE COALESCE(last_report_at,0) >= ?`, cutoff).Scan(&nodesOnline); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
+		return
+	}
+	if err := s.db.QueryRow(`SELECT count(*) FROM alerts WHERE status='firing'`).Scan(&alertsActive); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
+		return
+	}
+
+	rows, err := s.db.Query(`SELECT COALESCE(last_services_json,'[]') FROM nodes`)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
+		return
+	}
+	defer rows.Close()
+
+	servicesTotal := 0
+	byType := map[string]int{}
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
+			return
+		}
+		var svcs []report.Service
+		_ = json.Unmarshal([]byte(raw), &svcs)
+		for _, sv := range svcs {
+			servicesTotal++
+			if sv.Type != "" {
+				byType[sv.Type]++
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
+		return
+	}
+
+	dist := make([]serviceDist, 0, len(byType))
+	for typ, count := range byType {
+		dist = append(dist, serviceDist{Type: typ, Count: count})
+	}
+	sort.Slice(dist, func(i, j int) bool {
+		if dist[i].Count == dist[j].Count {
+			return dist[i].Type < dist[j].Type
+		}
+		return dist[i].Count > dist[j].Count
+	})
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"nodes_total":          nodesTotal,
+		"nodes_online":         nodesOnline,
+		"alerts_active":        alertsActive,
+		"services_total":       servicesTotal,
+		"service_distribution": dist,
+	})
+}
+
+type alertRow struct {
+	ID             int64  `json:"id"`
+	NodeID         string `json:"node_id"`
+	Rule           string `json:"rule"`
+	Status         string `json:"status"`
+	Message        string `json:"message"`
+	FirstSeenAt    int64  `json:"first_seen_at"`
+	LastSeenAt     int64  `json:"last_seen_at"`
+	RecoveredAt    int64  `json:"recovered_at"`
+	AcknowledgedAt int64  `json:"acknowledged_at"`
+}
+
+func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
+	q := `SELECT id, node_id, rule, status, message,
+		COALESCE(first_seen_at,0), COALESCE(last_seen_at,0), COALESCE(recovered_at,0), COALESCE(acknowledged_at,0)
+		FROM alerts`
+	args := []any{}
+	if status := r.URL.Query().Get("status"); status != "" {
+		q += ` WHERE status=?`
+		args = append(args, status)
+	}
+	q += ` ORDER BY COALESCE(last_seen_at,0) DESC`
+
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
+		return
+	}
+	defer rows.Close()
+
+	out := make([]alertRow, 0)
+	for rows.Next() {
+		var a alertRow
+		if err := rows.Scan(&a.ID, &a.NodeID, &a.Rule, &a.Status, &a.Message, &a.FirstSeenAt, &a.LastSeenAt, &a.RecoveredAt, &a.AcknowledgedAt); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
+			return
+		}
+		out = append(out, a)
+	}
+	if err := rows.Err(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleAlertAck(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"code": "bad_request"}})
+		return
+	}
+	res, err := s.db.Exec(`UPDATE alerts SET status='acknowledged', acknowledged_at=? WHERE id=?`, time.Now().Unix(), id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": map[string]any{"code": "not_found"}})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleVersionPatch(w http.ResponseWriter, r *http.Request) {
+	serviceType := r.PathValue("service_type")
+	if serviceType == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"code": "bad_request"}})
+		return
+	}
+	var in struct {
+		LatestVersion string `json:"latest_version"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.LatestVersion == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"code": "bad_request"}})
+		return
+	}
+	now := time.Now().Unix()
+	if _, err := s.db.Exec(`INSERT INTO versions(service_type,latest_version,source,updated_at)
+		VALUES(?,?,'manual',?)
+		ON CONFLICT(service_type) DO UPDATE SET latest_version=?,source='manual',updated_at=?`,
+		serviceType, in.LatestVersion, now, in.LatestVersion, now); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"service_type":   serviceType,
+		"latest_version": in.LatestVersion,
+		"source":         "manual",
+		"updated_at":     now,
+	})
+}
+
+func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"listen_addr":  s.cfg.ListenAddr,
+		"data_dir":     s.cfg.DataDir,
+		"node_timeout": s.cfg.NodeTimeout,
+		"admin":        map[string]any{"user": s.cfg.Admin.User},
+		"retention": map[string]any{
+			"raw_days":    s.cfg.Retention.RawDays,
+			"hourly_days": s.cfg.Retention.HourlyDays,
+			"daily_days":  s.cfg.Retention.DailyDays,
+		},
+	})
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {

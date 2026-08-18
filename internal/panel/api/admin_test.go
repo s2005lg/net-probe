@@ -141,3 +141,112 @@ func TestVersionsList(t *testing.T) {
 		t.Fatalf("versions=%+v", out)
 	}
 }
+
+func TestOverview(t *testing.T) {
+	d, cfg := openTestDB(t)
+	now := time.Now().Unix()
+	insertTestNode(t, d, "n1", "a", `{"hostname":"h1"}`, `[{"type":"xray"},{"type":"xray"}]`, now)
+	insertTestNode(t, d, "n2", "b", `{"hostname":"h2"}`, `[{"type":"hysteria2"}]`, now-600)
+	if _, err := d.Exec(`INSERT INTO alerts(node_id,rule,status,message,first_seen_at,last_seen_at)
+		VALUES('n2','node_offline','firing','offline',?,?)`, now, now); err != nil {
+		t.Fatalf("insert alert: %v", err)
+	}
+	s := New(d, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/overview", nil)
+	rr := httptest.NewRecorder()
+	s.handleOverview(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var out map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out["nodes_total"] != float64(2) || out["nodes_online"] != float64(1) ||
+		out["alerts_active"] != float64(1) || out["services_total"] != float64(3) {
+		t.Fatalf("overview=%+v", out)
+	}
+}
+
+func TestAlertsAndAck(t *testing.T) {
+	d, cfg := openTestDB(t)
+	now := time.Now().Unix()
+	if _, err := d.Exec(`INSERT INTO alerts(node_id,rule,status,message,first_seen_at,last_seen_at)
+		VALUES('n1','node_offline','firing','offline',?,?)`, now, now); err != nil {
+		t.Fatalf("insert alert: %v", err)
+	}
+	var id int64
+	if err := d.QueryRow(`SELECT id FROM alerts WHERE node_id='n1'`).Scan(&id); err != nil {
+		t.Fatalf("query alert id: %v", err)
+	}
+	s := New(d, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/alerts", nil)
+	rr := httptest.NewRecorder()
+	s.handleAlerts(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("list code=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var out []map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out) != 1 || out[0]["status"] != "firing" {
+		t.Fatalf("alerts=%+v", out)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/admin/alerts/1/ack", nil)
+	req.SetPathValue("id", "1")
+	rr = httptest.NewRecorder()
+	s.handleAlertAck(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("ack code=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var status string
+	if err := d.QueryRow(`SELECT status FROM alerts WHERE id=?`, id).Scan(&status); err != nil {
+		t.Fatalf("query acked: %v", err)
+	}
+	if status != "acknowledged" {
+		t.Fatalf("status=%q", status)
+	}
+}
+
+func TestVersionPatch(t *testing.T) {
+	d, cfg := openTestDB(t)
+	s := New(d, cfg)
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/admin/versions/xray", strings.NewReader(`{"latest_version":"25.1.1"}`))
+	req.SetPathValue("service_type", "xray")
+	rr := httptest.NewRecorder()
+	s.handleVersionPatch(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var latest, source string
+	if err := d.QueryRow(`SELECT latest_version, source FROM versions WHERE service_type='xray'`).Scan(&latest, &source); err != nil {
+		t.Fatalf("query version: %v", err)
+	}
+	if latest != "25.1.1" || source != "manual" {
+		t.Fatalf("latest=%q source=%q", latest, source)
+	}
+}
+
+func TestSettings(t *testing.T) {
+	d, cfg := openTestDB(t)
+	s := New(d, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/settings", nil)
+	rr := httptest.NewRecorder()
+	s.handleSettings(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("code=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var out map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out["node_timeout"] != "3m" {
+		t.Fatalf("settings=%+v", out)
+	}
+}
