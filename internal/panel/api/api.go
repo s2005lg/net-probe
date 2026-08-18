@@ -36,6 +36,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("GET /api/v1/admin/versions", s.requireAdmin(s.handleVersions))
 	mux.Handle("PATCH /api/v1/admin/versions/{service_type}", s.requireAdmin(s.handleVersionPatch))
 	mux.Handle("GET /api/v1/admin/settings", s.requireAdmin(s.handleSettings))
+	mux.Handle("/", s.staticHandler())
 	return mux
 }
 
