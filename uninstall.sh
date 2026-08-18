@@ -6,11 +6,8 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-MARKER="/etc/net-probe/.net-probe-installed"
 BIN="/usr/local/bin/net-probe"
 CONFIG_DIR="/etc/net-probe"
-MARKER_EXISTED=0
-[ -e "$MARKER" ] && MARKER_EXISTED=1
 
 # 停止并禁用 timer（会同时移除 timers.target.wants 下的软链接）。
 systemctl disable --now net-probe.timer >/dev/null 2>&1 || true
@@ -28,19 +25,16 @@ systemctl daemon-reload
 rm -f "$BIN"
 
 # 删除配置目录。
-if [ "$MARKER_EXISTED" -eq 1 ]; then
-  rm -rf "$CONFIG_DIR"
-else
-  # 没有安装标记时也尽力清理已知文件，但保留未由本工具创建的目录。
-  rm -f "$CONFIG_DIR/config.toml"
-  rm -rf "$CONFIG_DIR/services.d"
-  rm -f "$CONFIG_DIR/panel-token"
-fi
+rm -rf "$CONFIG_DIR"
 
 # 仅当确为本工具创建的系统用户时才删除（避免误删管理员已有的同名用户）。
-if [ "$MARKER_EXISTED" -eq 1 ] && id net-probe >/dev/null 2>&1; then
-  if getent passwd net-probe | cut -d: -f7 | grep -q '/nologin'; then
-    userdel net-probe
+if id net-probe >/dev/null 2>&1; then
+  shell="$(getent passwd net-probe | cut -d: -f7)"
+  home="$(getent passwd net-probe | cut -d: -f6)"
+  if [ "$shell" = "/usr/sbin/nologin" ] || [ "$shell" = "/bin/false" ]; then
+    if [ "$home" = "/home/net-probe" ] || [ "$home" = "/nonexistent" ] || [ -z "$home" ]; then
+      userdel net-probe
+    fi
   fi
 fi
 
