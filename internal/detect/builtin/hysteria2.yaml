@@ -7,3 +7,4 @@ transport: ["udp"]
 cert_paths: ["/etc/hysteria/server.crt"]
 listen_ports: []
 stats_kind: hysteria2
+stats_config_paths: ["/etc/hysteria/config.yaml", "/etc/hysteria/config.yml"]

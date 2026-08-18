@@ -2,6 +2,7 @@ package report
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -46,5 +47,15 @@ func TestReportMarshal(t *testing.T) {
 	}
 	if _, ok := m["services"]; !ok {
 		t.Fatal("missing services")
+	}
+}
+
+func TestStatsOnlineClients(t *testing.T) {
+	b, err := json.Marshal(Stats{Tx: 10, Rx: 20, OnlineClients: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"online_clients":3`) {
+		t.Fatalf("json = %s", b)
 	}
 }

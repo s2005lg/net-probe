@@ -15,7 +15,7 @@ type Deps struct {
 	ProcRoot string
 }
 
-func Detect(ctx context.Context, reg *Registry, cfg config.DetectConfig, deps Deps) ([]report.Service, error) {
+func Detect(ctx context.Context, reg *Registry, cfg config.DetectConfig, statsCfg config.StatsConfig, deps Deps) ([]report.Service, error) {
 	procRoot := deps.ProcRoot
 	if procRoot == "" {
 		procRoot = "/proc"
@@ -66,6 +66,13 @@ func Detect(ctx context.Context, reg *Registry, cfg config.DetectConfig, deps De
 				break
 			}
 		}
+		if tmpl.StatsKind != "" {
+			if endpoint, secret, ok := statsEndpointFor(tmpl, statsCfg); ok {
+				if st, err := CollectStatsWithRunner(ctx, tmpl.StatsKind, endpoint, secret, deps.Runner); err == nil {
+					svc.Stats = st
+				}
+			}
+		}
 		if !svc.Active {
 			svc.Status = "error"
 			svc.Error = "service not active"
@@ -73,6 +80,16 @@ func Detect(ctx context.Context, reg *Registry, cfg config.DetectConfig, deps De
 		out = append(out, svc)
 	}
 	return out, nil
+}
+
+func statsEndpointFor(tmpl Template, statsCfg config.StatsConfig) (string, string, bool) {
+	if sc, ok := statsCfg.Services[tmpl.StatsKind]; ok && sc.Endpoint != "" {
+		return sc.Endpoint, sc.Secret, true
+	}
+	if ep, ok := discoverStats(tmpl); ok {
+		return ep.Endpoint, ep.Secret, true
+	}
+	return "", "", false
 }
 
 func readProcSockets(root string) []Socket {

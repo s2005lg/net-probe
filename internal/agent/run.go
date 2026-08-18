@@ -57,7 +57,7 @@ func Build(ctx context.Context, cfg *config.Config, version string, runner detec
 	if err != nil {
 		return nil, err
 	}
-	svcs, err := detect.Detect(ctx, reg, cfg.Detect, detect.Deps{Runner: runner, ProcRoot: "/proc"})
+	svcs, err := detect.Detect(ctx, reg, cfg.Detect, cfg.Stats, detect.Deps{Runner: runner, ProcRoot: "/proc"})
 	if err != nil {
 		return nil, err
 	}

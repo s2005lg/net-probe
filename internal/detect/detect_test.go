@@ -17,7 +17,7 @@ func TestDetectKnownUnit(t *testing.T) {
 		"systemctl list-unit-files --type=service --no-legend --no-pager":                                          "hysteria-server.service enabled\n",
 		"systemctl show hysteria-server --property=ActiveState,SubState,UnitFileState,NRestarts,MainPID,ExecStart": "ActiveState=active\nUnitFileState=enabled\nMainPID=10\nExecStart={ path=/usr/local/bin/hysteria }",
 	}}
-	svcs, err := Detect(context.Background(), reg, config.DetectConfig{}, Deps{Runner: r, ProcRoot: "/nonexistent"})
+	svcs, err := Detect(context.Background(), reg, config.DetectConfig{}, config.StatsConfig{}, Deps{Runner: r, ProcRoot: "/nonexistent"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -43,3 +43,16 @@ func TestPanelSink(t *testing.T) {
 		t.Fatalf("auth = %q", gotAuth)
 	}
 }
+
+func TestSinkTLSConfig(t *testing.T) {
+	t.Setenv("T", "s")
+	s, err := New(config.Sink{Type: "webhook", URL: "https://example.com", TokenEnv: "T", TLSSkipVerify: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hs := s.(*httpSink)
+	tr, ok := hs.client.Transport.(*http.Transport)
+	if !ok || tr.TLSClientConfig == nil || !tr.TLSClientConfig.InsecureSkipVerify {
+		t.Fatal("TLSSkipVerify not applied")
+	}
+}

@@ -3,8 +3,11 @@ package sink
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/s2005lg/net-probe/internal/config"
@@ -30,7 +33,23 @@ func New(cfg config.Sink) (Sink, error) {
 	if method == "" {
 		method = http.MethodPost
 	}
-	return &httpSink{cfg: cfg, token: token, method: method, client: &http.Client{Timeout: 10 * time.Second}}, nil
+	client := &http.Client{Timeout: 10 * time.Second}
+	if cfg.TLSSkipVerify || cfg.TLSCAFile != "" {
+		tlsCfg := &tls.Config{InsecureSkipVerify: cfg.TLSSkipVerify} // #nosec G402 — user explicitly enabled
+		if cfg.TLSCAFile != "" {
+			b, err := os.ReadFile(cfg.TLSCAFile)
+			if err != nil {
+				return nil, err
+			}
+			pool := x509.NewCertPool()
+			if !pool.AppendCertsFromPEM(b) {
+				return nil, fmt.Errorf("bad CA file %s", cfg.TLSCAFile)
+			}
+			tlsCfg.RootCAs = pool
+		}
+		client.Transport = &http.Transport{TLSClientConfig: tlsCfg}
+	}
+	return &httpSink{cfg: cfg, token: token, method: method, client: client}, nil
 }
 
 func (s *httpSink) Send(ctx context.Context, body []byte) error {

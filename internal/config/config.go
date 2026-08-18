@@ -16,6 +16,8 @@ type Sink struct {
 	TokenEnv          string            `toml:"token_env"`
 	TokenFile         string            `toml:"token_file"`
 	InsecureAllowHTTP bool              `toml:"insecure_allow_http"`
+	TLSSkipVerify     bool              `toml:"tls_skip_verify"`
+	TLSCAFile         string            `toml:"tls_ca_file"`
 }
 
 type AgentConfig struct {
@@ -33,11 +35,21 @@ type DetectConfig struct {
 	CustomDir string   `toml:"custom_dir"`
 }
 
+type StatsService struct {
+	Endpoint string `toml:"endpoint"`
+	Secret   string `toml:"secret"`
+}
+
+type StatsConfig struct {
+	Services map[string]StatsService `toml:"services"`
+}
+
 type Config struct {
 	Agent   AgentConfig   `toml:"agent"`
 	Sinks   []Sink        `toml:"sink"`
 	Collect CollectConfig `toml:"collect"`
 	Detect  DetectConfig  `toml:"detect"`
+	Stats   StatsConfig   `toml:"stats"`
 }
 
 func Default() *Config {

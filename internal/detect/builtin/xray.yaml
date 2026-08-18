@@ -7,3 +7,4 @@ transport: ["tcp", "udp"]
 cert_paths: []
 listen_ports: []
 stats_kind: xray
+stats_config_paths: ["/usr/local/etc/xray/config.json", "/etc/xray/config.json"]

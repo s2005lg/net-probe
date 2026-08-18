@@ -48,3 +48,28 @@ func TestValidateRejectsHTTPPanel(t *testing.T) {
 		t.Fatal("expected error for http panel")
 	}
 }
+
+func TestStatsConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	content := `
+[[sink]]
+type = "webhook"
+url = "https://example.com/report"
+
+[stats.services.hysteria2]
+endpoint = "http://127.0.0.1:9999"
+secret = "s3cret"
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, ok := cfg.Stats.Services["hysteria2"]
+	if !ok || s.Endpoint != "http://127.0.0.1:9999" || s.Secret != "s3cret" {
+		t.Fatalf("stats = %+v", cfg.Stats.Services)
+	}
+}

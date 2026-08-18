@@ -6,15 +6,16 @@ import (
 )
 
 type Template struct {
-	ID             string   `yaml:"id"`
-	Name           string   `yaml:"name"`
-	Units          []string `yaml:"units"`
-	BinaryPatterns []string `yaml:"binary_patterns"`
-	VersionCmd     []string `yaml:"version_cmd"`
-	Transport      []string `yaml:"transport"`
-	CertPaths      []string `yaml:"cert_paths"`
-	ListenPorts    []uint16 `yaml:"listen_ports"`
-	StatsKind      string   `yaml:"stats_kind"`
+	ID               string   `yaml:"id"`
+	Name             string   `yaml:"name"`
+	Units            []string `yaml:"units"`
+	BinaryPatterns   []string `yaml:"binary_patterns"`
+	VersionCmd       []string `yaml:"version_cmd"`
+	Transport        []string `yaml:"transport"`
+	CertPaths        []string `yaml:"cert_paths"`
+	ListenPorts      []uint16 `yaml:"listen_ports"`
+	StatsKind        string   `yaml:"stats_kind"`
+	StatsConfigPaths []string `yaml:"stats_config_paths"`
 
 	unitRe []*regexp.Regexp
 	binRe  []*regexp.Regexp
