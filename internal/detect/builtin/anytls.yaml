@@ -1,0 +1,9 @@
+id: anytls
+name: AnyTLS
+units: ["anytls", "anytls@.*"]
+binary_patterns: ["anytls"]
+version_cmd: ["--version"]
+transport: ["tcp"]
+cert_paths: []
+listen_ports: []
+stats_kind: ""

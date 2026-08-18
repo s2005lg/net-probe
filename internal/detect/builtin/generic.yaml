@@ -1,0 +1,9 @@
+id: generic
+name: Generic
+units: []
+binary_patterns: []
+version_cmd: []
+transport: []
+cert_paths: []
+listen_ports: []
+stats_kind: ""

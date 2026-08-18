@@ -1,0 +1,9 @@
+id: shadowsocks
+name: Shadowsocks
+units: ["shadowsocks-libev.*", "shadowsocks-rust.*", "ssserver.*"]
+binary_patterns: ["ss-server", "ssserver"]
+version_cmd: ["--version"]
+transport: ["tcp", "udp"]
+cert_paths: []
+listen_ports: []
+stats_kind: ""

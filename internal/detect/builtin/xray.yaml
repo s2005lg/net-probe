@@ -1,0 +1,9 @@
+id: xray
+name: Xray
+units: ["xray", "xray@.*"]
+binary_patterns: ["xray"]
+version_cmd: ["version"]
+transport: ["tcp", "udp"]
+cert_paths: []
+listen_ports: []
+stats_kind: xray

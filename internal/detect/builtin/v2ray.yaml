@@ -1,0 +1,9 @@
+id: v2ray
+name: V2Ray
+units: ["v2ray", "v2ray@.*"]
+binary_patterns: ["v2ray"]
+version_cmd: ["version"]
+transport: ["tcp", "udp"]
+cert_paths: []
+listen_ports: []
+stats_kind: ""

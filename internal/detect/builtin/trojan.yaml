@@ -1,0 +1,9 @@
+id: trojan
+name: Trojan
+units: ["trojan", "trojan-go"]
+binary_patterns: ["trojan", "trojan-go"]
+version_cmd: ["--version"]
+transport: ["tcp"]
+cert_paths: []
+listen_ports: []
+stats_kind: ""

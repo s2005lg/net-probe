@@ -1,0 +1,9 @@
+id: hysteria2
+name: Hysteria2
+units: ["hysteria-server", "hysteria@.*"]
+binary_patterns: ["hysteria"]
+version_cmd: ["version"]
+transport: ["udp"]
+cert_paths: ["/etc/hysteria/server.crt"]
+listen_ports: []
+stats_kind: hysteria2
