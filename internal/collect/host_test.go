@@ -48,3 +48,15 @@ func TestParseOSRelease(t *testing.T) {
 		t.Fatalf("os = %q %q", name, version)
 	}
 }
+
+func TestFormatBytes(t *testing.T) {
+	if got := formatBytes(21046689792); got != "21.05 GB" {
+		t.Fatalf("gb = %q", got)
+	}
+	if got := formatBytes(2392809472); got != "2.39 GB" {
+		t.Fatalf("gb = %q", got)
+	}
+	if got := formatBytes(512 * 1000 * 1000); got != "512.00 MB" {
+		t.Fatalf("mb = %q", got)
+	}
+}

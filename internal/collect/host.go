@@ -126,6 +126,8 @@ func Host(ctx context.Context, cfg config.CollectConfig, runner detect.Runner) (
 		if out, err := runner.Run(ctx, "df", "-P", cfg.DiskMounts[0]); err == nil {
 			if total, used, pct, err := ParseDfFull(out); err == nil {
 				h.DiskTotalBytes, h.DiskUsedBytes, h.DiskUsedPct = total, used, pct
+				h.DiskTotalHuman = formatBytes(total)
+				h.DiskUsedHuman = formatBytes(used)
 			}
 		}
 	}
@@ -133,6 +135,19 @@ func Host(ctx context.Context, cfg config.CollectConfig, runner detect.Runner) (
 		h.UpgradableCount = upgradableCount(ctx, runner)
 	}
 	return h, nil
+}
+
+func formatBytes(b uint64) string {
+	const gb = 1_000_000_000
+	const mb = 1_000_000
+	switch {
+	case b >= gb:
+		return fmt.Sprintf("%.2f GB", float64(b)/gb)
+	case b >= mb:
+		return fmt.Sprintf("%.2f MB", float64(b)/mb)
+	default:
+		return fmt.Sprintf("%d B", b)
+	}
 }
 
 func hostIPs() (ipv4, ipv6 string) {

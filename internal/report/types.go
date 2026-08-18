@@ -17,6 +17,8 @@ type Host struct {
 	MemUsedPct        float64 `json:"mem_used_pct"`
 	DiskTotalBytes    uint64  `json:"disk_total_bytes,omitempty"`
 	DiskUsedBytes     uint64  `json:"disk_used_bytes,omitempty"`
+	DiskTotalHuman    string  `json:"disk_total_human,omitempty"`
+	DiskUsedHuman     string  `json:"disk_used_human,omitempty"`
 	DiskUsedPct       float64 `json:"disk_used_pct"`
 	UpgradableCount   int     `json:"upgradable_count"`
 }
