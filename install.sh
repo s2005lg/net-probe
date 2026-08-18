@@ -28,6 +28,7 @@ if ! id net-probe >/dev/null 2>&1; then
 fi
 
 install -d -m 0755 /etc/net-probe/services.d
+touch /etc/net-probe/.net-probe-installed
 
 if [ -n "${NET_PROBE_PANEL_URL:-}" ]; then
   {
