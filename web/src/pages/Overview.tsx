@@ -115,6 +115,19 @@ export default function OverviewPage() {
     ? nodes.find((node) => node.node_id === selectedNodeId) ?? null
     : null;
 
+  const legendNodeId = (entry: {
+    value?: string | number;
+    dataKey?: string | number;
+  }): string | null => {
+    const dataKey = String(entry.dataKey ?? "");
+    if (dataKey && nodeAgg.some((item) => item.node.node_id === dataKey)) {
+      return dataKey;
+    }
+    const value = String(entry.value ?? "");
+    const match = nodeAgg.find((item) => nodeLabel(item.node) === value);
+    return match?.node.node_id ?? null;
+  };
+
   const kpis = [
     { label: "节点总数", value: overview.nodes_total, to: "/nodes" },
     { label: "在线", value: overview.nodes_online, to: "/nodes?status=online" },
@@ -156,15 +169,14 @@ export default function OverviewPage() {
                     const node = nodeAgg.find((item) => item.node.node_id === value);
                     return node ? nodeLabel(node.node) : value;
                   }}
-                  onMouseEnter={(data: { dataKey?: string | number }) => {
-                    const key = String(data.dataKey ?? "");
-                    setHoveredNodeId(key === "other" || key === "" ? null : key);
+                  onMouseEnter={(data: { value?: string | number; dataKey?: string | number }) => {
+                    setHoveredNodeId(legendNodeId(data));
                   }}
                   onMouseLeave={() => setHoveredNodeId(null)}
-                  onClick={(data: { dataKey?: string | number }) => {
-                    const key = String(data.dataKey ?? "");
-                    if (key === "other" || key === "") return;
+                  onClick={(data: { value?: string | number; dataKey?: string | number }) => {
                     setSelectedType(null);
+                    const key = legendNodeId(data);
+                    if (!key) return;
                     setSelectedNodeId((prev) => (prev === key ? null : key));
                   }}
                 />
