@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import {
   Bar,
   BarChart,
+  Legend,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -11,9 +12,34 @@ import {
 import StatusBadge from "../components/StatusBadge";
 import { api, type Node, type Overview } from "../lib/api";
 
+const TOP_N = 10;
+const NODE_COLORS = [
+  "#3b82f6",
+  "#10b981",
+  "#f59e0b",
+  "#8b5cf6",
+  "#ec4899",
+  "#14b8a6",
+  "#f97316",
+  "#6366f1",
+  "#84cc16",
+  "#06b6d4",
+];
+const OTHER_COLOR = "#94a3b8";
+
+type ChartDatum = {
+  type: string;
+  [key: string]: string | number;
+};
+
+function nodeLabel(node: Node): string {
+  return node.alias || node.node_id;
+}
+
 export default function OverviewPage() {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [nodes, setNodes] = useState<Node[]>([]);
+  const [selectedType, setSelectedType] = useState<string | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -27,6 +53,60 @@ export default function OverviewPage() {
 
   if (error) return <p className="text-danger">{error}</p>;
   if (!overview) return <p className="text-muted">加载中…</p>;
+
+  const serviceTypes = Array.from(
+    new Set(nodes.flatMap((n) => n.services.map((s) => s.type)).filter(Boolean)),
+  ).sort();
+
+  const nodeAgg = nodes
+    .map((node) => {
+      const byType: Record<string, number> = {};
+      for (const service of node.services) {
+        if (!service.type) continue;
+        byType[service.type] = (byType[service.type] ?? 0) + 1;
+      }
+      return {
+        node,
+        byType,
+        total: Object.values(byType).reduce((sum, count) => sum + count, 0),
+      };
+    })
+    .filter((item) => item.total > 0)
+    .sort((a, b) => {
+      if (a.total !== b.total) return b.total - a.total;
+      if (a.node.last_report_at !== b.node.last_report_at) {
+        return b.node.last_report_at - a.node.last_report_at;
+      }
+      return a.node.node_id.localeCompare(b.node.node_id);
+    });
+
+  const topNodes = nodeAgg.slice(0, TOP_N);
+  const otherNodes = nodeAgg.slice(TOP_N);
+
+  const chartData: ChartDatum[] = serviceTypes.map((type) => {
+    const row: ChartDatum = { type };
+    for (const item of topNodes) {
+      row[item.node.node_id] = item.byType[type] ?? 0;
+    }
+    row.other = otherNodes.reduce((sum, item) => sum + (item.byType[type] ?? 0), 0);
+    return row;
+  });
+
+  const detailRows = selectedType
+    ? nodes
+        .map((node) => ({
+          node,
+          count: node.services.filter((s) => s.type === selectedType).length,
+        }))
+        .filter((row) => row.count > 0)
+        .sort((a, b) => {
+          if (a.count !== b.count) return b.count - a.count;
+          if (a.node.last_report_at !== b.node.last_report_at) {
+            return b.node.last_report_at - a.node.last_report_at;
+          }
+          return a.node.node_id.localeCompare(b.node.node_id);
+        })
+    : [];
 
   const kpis = [
     { label: "节点总数", value: overview.nodes_total, to: "/nodes" },
@@ -52,19 +132,97 @@ export default function OverviewPage() {
 
       <section className="rounded border border-edge bg-panel p-4">
         <h2 className="mb-3 font-head text-fg">服务类型分布</h2>
-        {overview.service_distribution.length === 0 ? (
+        {serviceTypes.length === 0 ? (
           <p className="text-muted">暂无数据</p>
         ) : (
-          <ResponsiveContainer width="100%" height={240}>
-            <BarChart data={overview.service_distribution}>
-              <XAxis dataKey="type" stroke="var(--color-muted)" />
-              <YAxis allowDecimals={false} stroke="var(--color-muted)" />
-              <Tooltip cursor={{ fill: "var(--color-edge)" }} />
-              <Bar dataKey="count" fill="var(--color-ok)" radius={[3, 3, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+          <>
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={chartData}>
+                <XAxis dataKey="type" stroke="var(--color-muted)" />
+                <YAxis allowDecimals={false} stroke="var(--color-muted)" />
+                <Tooltip
+                  cursor={{ fill: "var(--color-edge)" }}
+                  formatter={(value, name) => [value, name]}
+                />
+                <Legend
+                  formatter={(value) => {
+                    const node = nodeAgg.find((item) => item.node.node_id === value);
+                    return node ? nodeLabel(node.node) : value;
+                  }}
+                />
+                {topNodes.map((item, index) => (
+                  <Bar
+                    key={item.node.node_id}
+                    dataKey={item.node.node_id}
+                    stackId="nodes"
+                    name={nodeLabel(item.node)}
+                    fill={NODE_COLORS[index % NODE_COLORS.length]}
+                    radius={[0, 0, 0, 0]}
+                    onClick={(entry) => setSelectedType(entry.type)}
+                  />
+                ))}
+                {otherNodes.length > 0 ? (
+                  <Bar
+                    dataKey="other"
+                    stackId="nodes"
+                    name="其他"
+                    fill={OTHER_COLOR}
+                    radius={[0, 0, 0, 0]}
+                    onClick={(entry) => setSelectedType(entry.type)}
+                  />
+                ) : null}
+              </BarChart>
+            </ResponsiveContainer>
+            <p className="mt-2 text-xs text-muted">
+              点击柱状图中的色块，可查看该服务类型的完整节点明细。
+            </p>
+          </>
         )}
       </section>
+
+      {selectedType ? (
+        <section className="rounded border border-edge bg-panel p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="font-head text-fg">{selectedType} 节点明细</h2>
+            <button
+              type="button"
+              onClick={() => setSelectedType(null)}
+              className="rounded border border-edge px-2 py-1 text-sm text-muted transition-colors hover:border-ok hover:text-fg"
+            >
+              关闭
+            </button>
+          </div>
+          <div className="max-h-80 overflow-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="text-muted">
+                <tr>
+                  <th className="px-3 py-2">节点</th>
+                  <th className="px-3 py-2">数量</th>
+                  <th className="px-3 py-2">状态</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-edge">
+                {detailRows.map(({ node, count }) => (
+                  <tr key={node.node_id} className="hover:bg-surface">
+                    <td className="px-3 py-2 text-fg">
+                      <Link
+                        to={`/nodes/${encodeURIComponent(node.node_id)}`}
+                        className="hover:text-ok"
+                      >
+                        {nodeLabel(node)}
+                      </Link>
+                    </td>
+                    <td className="px-3 py-2 text-fg">{count}</td>
+                    <td className="px-3 py-2">
+                      <StatusBadge status={node.status} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
 
       <section className="rounded border border-edge bg-panel p-4">
         <h2 className="mb-3 font-head text-fg">最近节点</h2>
