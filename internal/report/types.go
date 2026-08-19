@@ -37,7 +37,7 @@ type Cert struct {
 type Stats struct {
 	Tx            uint64 `json:"tx"`
 	Rx            uint64 `json:"rx"`
-	OnlineClients uint64 `json:"online_clients,omitempty"`
+	OnlineClients uint64 `json:"online_clients"`
 }
 
 type Service struct {
