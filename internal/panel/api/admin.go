@@ -511,6 +511,9 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		var svcs []report.Service
 		_ = json.Unmarshal([]byte(raw), &svcs)
 		for _, sv := range svcs {
+			if sv.Type == "generic" {
+				continue
+			}
 			servicesTotal++
 			if sv.Type != "" {
 				byType[sv.Type]++

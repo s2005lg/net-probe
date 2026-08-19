@@ -115,7 +115,7 @@ disk_mounts = ["/"]
 upgradable = true
 
 [detect]
-include = ["hysteria2", "xray", "v2ray", "sing-box", "shadowsocks", "trojan", "tuic", "anytls", "generic"]
+include = ["hysteria2", "xray", "v2ray", "sing-box", "shadowsocks", "trojan", "tuic", "anytls"]
 custom_dir = "/etc/net-probe/services.d"
 ```
 
@@ -149,7 +149,6 @@ The built-in detection templates are:
 - Trojan
 - TUIC
 - AnyTLS
-- Generic
 
 See `internal/detect/builtin/*.yaml` for the built-in patterns. Custom
 templates are loaded from `/etc/net-probe/services.d` by default.
@@ -298,7 +297,7 @@ disk_mounts = ["/"]
 upgradable = true
 
 [detect]
-include = ["hysteria2", "xray", "v2ray", "sing-box", "shadowsocks", "trojan", "tuic", "anytls", "generic"]
+include = ["hysteria2", "xray", "v2ray", "sing-box", "shadowsocks", "trojan", "tuic", "anytls"]
 custom_dir = "/etc/net-probe/services.d"
 ```
 
@@ -330,7 +329,6 @@ net-probe --version
 - Trojan
 - TUIC
 - AnyTLS
-- Generic
 
 内置匹配规则位于 `internal/detect/builtin/*.yaml`。默认从 `/etc/net-probe/services.d` 加载自定义模板。
 

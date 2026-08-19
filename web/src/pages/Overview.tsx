@@ -53,7 +53,11 @@ export default function OverviewPage() {
   if (!overview) return <p className="text-muted">加载中…</p>;
 
   const serviceTypes = Array.from(
-    new Set(nodes.flatMap((n) => n.services.map((s) => s.type)).filter(Boolean)),
+    new Set(
+      nodes
+        .flatMap((n) => n.services.map((s) => s.type))
+        .filter((type) => type && type !== "generic"),
+    ),
   ).sort();
 
   const nodeAgg = nodes
@@ -94,7 +98,7 @@ export default function OverviewPage() {
     ? nodes
         .map((node) => ({
           node,
-          count: node.services.filter((s) => s.type === selectedType).length,
+          count: node.services.filter((s) => s.type === selectedType && s.type !== "generic").length,
         }))
         .filter((row) => row.count > 0)
         .sort((a, b) => {

@@ -60,7 +60,7 @@ func Default() *Config {
 			Upgradable: true,
 		},
 		Detect: DetectConfig{
-			Include:   []string{"hysteria2", "xray", "v2ray", "sing-box", "shadowsocks", "trojan", "tuic", "anytls", "generic"},
+			Include:   []string{"hysteria2", "xray", "v2ray", "sing-box", "shadowsocks", "trojan", "tuic", "anytls"},
 			CustomDir: "/etc/net-probe/services.d",
 		},
 	}

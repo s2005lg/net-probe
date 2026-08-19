@@ -148,10 +148,10 @@ export default function NodesPage() {
                 </td>
                 <td className="px-3 py-2 text-muted">{n.host.ipv4 || n.host.ipv6 || "—"}</td>
                 <td className="px-3 py-2 text-muted">
-                  {n.services.map((s) => s.type).join(", ") || "—"}
+                  {n.services.filter((s) => s.type !== "generic").map((s) => s.type).join(", ") || "—"}
                 </td>
                 <td className="px-3 py-2 text-muted">
-                  {n.services.map((s) => s.version || s.type).join(", ") || "—"}
+                  {n.services.filter((s) => s.type !== "generic").map((s) => s.version || s.type).join(", ") || "—"}
                 </td>
                 <td className="px-3 py-2">
                   <StatusBadge status={n.status} />

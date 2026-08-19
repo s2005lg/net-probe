@@ -111,11 +111,11 @@ export default function NodeDetailPage() {
 
       <section className="rounded border border-edge bg-panel p-4">
         <h2 className="mb-3 font-head text-fg">服务</h2>
-        {node.services.length === 0 ? (
+        {node.services.filter((s) => s.type !== "generic").length === 0 ? (
           <p className="text-muted">暂无服务</p>
         ) : (
           <div className="grid gap-3 md:grid-cols-2">
-            {node.services.map((s, i) => (
+            {node.services.filter((s) => s.type !== "generic").map((s, i) => (
               <div key={`${s.type}-${i}`} className="rounded border border-edge bg-surface p-3">
                 <div className="flex items-center justify-between">
                   <span className="font-medium text-fg">{s.type}</span>

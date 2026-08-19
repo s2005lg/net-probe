@@ -27,7 +27,9 @@ export default function VersionsPage() {
         );
         const nextRows = nodes
           .flatMap((node) =>
-            node.services.map((service) => {
+            node.services
+              .filter((service) => service.type !== "generic")
+              .map((service) => {
               const latest = versionByType.get(service.type);
               return {
                 node,
