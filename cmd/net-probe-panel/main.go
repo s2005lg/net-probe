@@ -74,6 +74,7 @@ func main() {
 	startBackground(ctx, d, cfg)
 
 	server := api.New(d, cfg)
+	server.ConfigPath = *cfgPath
 	log.Printf("net-probe-panel listening on %s", cfg.ListenAddr)
 	if err := http.ListenAndServeTLS(cfg.ListenAddr, certPath, keyPath, server.Routes()); err != nil {
 		log.Fatalf("serve: %v", err)
@@ -91,7 +92,7 @@ func startBackground(ctx context.Context, d *sql.DB, cfg *config.Config) {
 			log.Printf("alert evaluation: %v", err)
 		}
 	})
-	go runEvery(ctx, 24*time.Hour, func(ctx context.Context) {
+	go runEvery(ctx, 12*time.Hour, func(ctx context.Context) {
 		refreshVersions(ctx, d)
 	})
 }

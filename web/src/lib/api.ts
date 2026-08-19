@@ -138,6 +138,14 @@ export interface SettingsData {
   node_timeout: string;
   admin: { user: string };
   retention: { raw_days: number; hourly_days: number; daily_days: number };
+  alert: {
+    cert_expiry_days: number;
+    disk_usage_pct: number;
+    mem_usage_pct: number;
+    telegram_token: string;
+    telegram_chat_id: string;
+    webhook_url: string;
+  };
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -227,4 +235,20 @@ export const api = {
       body: JSON.stringify({ latest_version: latestVersion }),
     }),
   settings: () => request<SettingsData>("/settings"),
+  patchSettings: (body: {
+    node_timeout?: string;
+    retention?: { raw_days?: number; hourly_days?: number; daily_days?: number };
+    alert?: {
+      cert_expiry_days?: number;
+      disk_usage_pct?: number;
+      mem_usage_pct?: number;
+      telegram_token?: string;
+      telegram_chat_id?: string;
+      webhook_url?: string;
+    };
+  }) =>
+    request<SettingsData>("/settings", {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
 };

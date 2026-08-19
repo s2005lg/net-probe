@@ -11,8 +11,9 @@ import (
 )
 
 type Server struct {
-	db  *sql.DB
-	cfg *config.Config
+	db         *sql.DB
+	cfg        *config.Config
+	ConfigPath string
 }
 
 func New(d *sql.DB, cfg *config.Config) *Server {
@@ -39,6 +40,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("GET /api/v1/admin/versions", s.requireAdmin(s.handleVersions))
 	mux.Handle("PATCH /api/v1/admin/versions/{service_type}", s.requireAdmin(s.handleVersionPatch))
 	mux.Handle("GET /api/v1/admin/settings", s.requireAdmin(s.handleSettings))
+	mux.Handle("PATCH /api/v1/admin/settings", s.requireAdmin(s.handleSettingsPatch))
 	mux.Handle("/", s.staticHandler())
 	return mux
 }

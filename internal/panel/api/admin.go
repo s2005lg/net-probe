@@ -4,11 +4,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"github.com/s2005lg/net-probe/internal/panel/auth"
 	"github.com/s2005lg/net-probe/internal/report"
 )
@@ -649,7 +651,92 @@ func (s *Server) handleVersionPatch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
+	writeJSON(w, http.StatusOK, s.settingsMap())
+}
+
+func (s *Server) handleSettingsPatch(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		NodeTimeout *string `json:"node_timeout"`
+		Retention   *struct {
+			RawDays    *int `json:"raw_days"`
+			HourlyDays *int `json:"hourly_days"`
+			DailyDays  *int `json:"daily_days"`
+		} `json:"retention"`
+		Alert *struct {
+			CertExpiryDays *int    `json:"cert_expiry_days"`
+			DiskUsagePct   *int    `json:"disk_usage_pct"`
+			MemUsagePct    *int    `json:"mem_usage_pct"`
+			TelegramToken  *string `json:"telegram_token"`
+			TelegramChatID *string `json:"telegram_chat_id"`
+			WebhookURL     *string `json:"webhook_url"`
+		} `json:"alert"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"code": "bad_request"}})
+		return
+	}
+
+	if in.NodeTimeout != nil {
+		if _, err := time.ParseDuration(*in.NodeTimeout); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"code": "bad_request", "message": "invalid node_timeout"}})
+			return
+		}
+		s.cfg.NodeTimeout = *in.NodeTimeout
+	}
+	if in.Retention != nil {
+		if in.Retention.RawDays != nil {
+			s.cfg.Retention.RawDays = *in.Retention.RawDays
+		}
+		if in.Retention.HourlyDays != nil {
+			s.cfg.Retention.HourlyDays = *in.Retention.HourlyDays
+		}
+		if in.Retention.DailyDays != nil {
+			s.cfg.Retention.DailyDays = *in.Retention.DailyDays
+		}
+	}
+	if in.Alert != nil {
+		if in.Alert.CertExpiryDays != nil {
+			s.cfg.Alert.CertExpiryDays = *in.Alert.CertExpiryDays
+		}
+		if in.Alert.DiskUsagePct != nil {
+			s.cfg.Alert.DiskUsagePct = *in.Alert.DiskUsagePct
+		}
+		if in.Alert.MemUsagePct != nil {
+			s.cfg.Alert.MemUsagePct = *in.Alert.MemUsagePct
+		}
+		if in.Alert.TelegramToken != nil {
+			s.cfg.Alert.TelegramToken = *in.Alert.TelegramToken
+		}
+		if in.Alert.TelegramChatID != nil {
+			s.cfg.Alert.TelegramChatID = *in.Alert.TelegramChatID
+		}
+		if in.Alert.WebhookURL != nil {
+			s.cfg.Alert.WebhookURL = *in.Alert.WebhookURL
+		}
+	}
+
+	if s.ConfigPath != "" {
+		f, err := os.Create(s.ConfigPath)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "config_write_error"}})
+			return
+		}
+		if err := toml.NewEncoder(f).Encode(s.cfg); err != nil {
+			_ = f.Close()
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "config_write_error"}})
+			return
+		}
+		if err := f.Close(); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "config_write_error"}})
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusOK, s.settingsMap())
+}
+
+func (s *Server) settingsMap() map[string]any {
+	return map[string]any{
 		"listen_addr":  s.cfg.ListenAddr,
 		"data_dir":     s.cfg.DataDir,
 		"node_timeout": s.cfg.NodeTimeout,
@@ -659,7 +746,15 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 			"hourly_days": s.cfg.Retention.HourlyDays,
 			"daily_days":  s.cfg.Retention.DailyDays,
 		},
-	})
+		"alert": map[string]any{
+			"cert_expiry_days": s.cfg.Alert.CertExpiryDays,
+			"disk_usage_pct":   s.cfg.Alert.DiskUsagePct,
+			"mem_usage_pct":    s.cfg.Alert.MemUsagePct,
+			"telegram_token":   s.cfg.Alert.TelegramToken,
+			"telegram_chat_id": s.cfg.Alert.TelegramChatID,
+			"webhook_url":      s.cfg.Alert.WebhookURL,
+		},
+	}
 }
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
