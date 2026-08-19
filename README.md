@@ -202,3 +202,175 @@ them up:
 ```bash
 sudo systemctl restart net-probe.timer
 ```
+
+---
+
+## 中文说明
+
+`net-probe` 是一个轻量级 Linux 探针，会定时采集主机健康信息，识别已安装的代理 / VPN 服务进程，并把 JSON 报告上传到 panel 或 webhook。
+
+### 功能特性
+
+- 通过 `systemd` timer 定时运行，不使用常驻守护进程。
+- 通过内置或自定义 YAML 模板，匹配 systemd 单元和运行中的二进制文件来识别服务。
+- 采集主机名、操作系统 / 内核信息、负载、内存、磁盘使用率、运行时间以及可升级软件包数量。
+- 报告已识别服务的监听端口和证书到期时间。
+- 通过 HTTPS 向 `panel` 或 `webhook` 上报，支持可选的 Bearer Token 认证。
+
+### 一键安装
+
+直接从 GitHub 安装最新版本：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install.sh | sudo bash
+```
+
+安装指定版本：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install.sh |   sudo NET_PROBE_VERSION=v0.1.0 bash
+```
+
+安装时配置 panel（可选）。Token 会写入 `/etc/net-probe/panel-token`，文件权限为 `0600`：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install.sh |   sudo NET_PROBE_PANEL_URL="https://panel.example.com"        NET_PROBE_PANEL_TOKEN="your-token" bash
+```
+
+如果没有提供 panel URL，安装脚本会生成一个占位的 webhook 配置到 `/etc/net-probe/config.toml`，由你自行编辑。
+
+安装脚本会：
+
+- 将二进制文件写入 `/usr/local/bin/net-probe`
+- 创建 `net-probe` 系统用户
+- 将配置写入 `/etc/net-probe/config.toml`
+- 安装并启用 `net-probe.timer` systemd 单元
+- 默认每 1 分钟运行一次探针
+
+### 一键卸载
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/uninstall.sh | sudo bash
+```
+
+卸载脚本会停止并禁用 timer，删除二进制文件、配置目录、systemd 单元和 `net-probe` 系统用户，不留下残留。
+
+### 安装 panel
+
+`net-probe-panel` 是一个内置 Web UI 的单文件二进制程序。它默认监听 20000–65535 范围内的随机端口，可通过 `NET_PROBE_PANEL_PORT` 覆盖，使用自签名证书，并将数据存储到 SQLite：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install-panel.sh | sudo bash
+```
+
+安装脚本会随机生成端口、Agent Token 和管理员密码，并在最后打印这三项信息。如需固定版本或预先指定：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install-panel.sh |   sudo NET_PROBE_PANEL_VERSION=v0.2.0        NET_PROBE_PANEL_PORT=24443        NET_PROBE_PANEL_AGENT_TOKEN="agent-token"        NET_PROBE_PANEL_ADMIN_PASSWORD="admin-password" bash
+```
+
+panel 会：
+
+- 将二进制文件写入 `/usr/local/bin/net-probe-panel`
+- 创建 `net-probe-panel` 系统用户
+- 将配置写入 `/etc/net-probe-panel/config.toml`，并将管理员密码写入 `/etc/net-probe-panel/panel.env`（权限 `0600`）
+- 安装并启用 `net-probe-panel` systemd 服务
+- 监听所选端口，并在首次启动时生成长期有效的自签名证书
+
+在浏览器中打开 `https://<panel-ip>:<port>`，接受自签名证书，然后使用管理员密码登录。由于证书是自签名的，Agent 上报时需要设置 `tls_skip_verify = true`，或将 `tls_ca_file` 指向 panel 证书。
+
+### 最小配置示例
+
+编辑 `/etc/net-probe/config.toml`：
+
+```toml
+[agent]
+node_id = "edge-01"
+log_level = "info"
+
+[[sink]]
+type = "panel"
+url = "https://panel.example.com"
+token_env = "NET_PROBE_PANEL_TOKEN"
+
+[collect]
+disk_mounts = ["/"]
+upgradable = true
+
+[detect]
+include = ["hysteria2", "xray", "v2ray", "sing-box", "shadowsocks", "trojan", "tuic", "anytls", "generic"]
+custom_dir = "/etc/net-probe/services.d"
+```
+
+在 timer 运行时通过环境变量提供 Token，例如在 systemd drop-in 文件或运行 `net-probe` 的 shell 中设置。
+
+### 校验配置并预览报告
+
+执行 dry-run，校验配置、采集当前主机和服务数据，并打印 JSON 报告预览，不会真正上报：
+
+```bash
+sudo net-probe --check --config /etc/net-probe/config.toml
+```
+
+查看版本：
+
+```bash
+net-probe --version
+```
+
+### 支持的服务
+
+内置检测模板包括：
+
+- Hysteria2
+- Xray
+- V2Ray
+- sing-box
+- Shadowsocks
+- Trojan
+- TUIC
+- AnyTLS
+- Generic
+
+内置匹配规则位于 `internal/detect/builtin/*.yaml`。默认从 `/etc/net-probe/services.d` 加载自定义模板。
+
+### 安全说明
+
+- Agent 以 root 身份运行，以便读取其他进程的 `/proc/<pid>/fd`（报告监听端口所需）；systemd 单元仍然设置了 `NoNewPrivileges=true` 和 `ProtectSystem=strict`。
+- panel 上报默认要求 HTTPS，除非针对仅限本机或其他可信端点显式设置 `insecure_allow_http = true`。
+- 密钥不会写入报告或配置文件；请使用 `token_env` 或 `token_file`，让 Token 从环境变量或文件中读取。
+
+### 编写检测模板
+
+在 `/etc/net-probe/services.d/` 中创建 YAML 文件，例如 `my-service.yaml`：
+
+```yaml
+id: my-service
+name: My Service
+units: ["my-service", "my-service@.*"]
+binary_patterns: ["my-service"]
+version_cmd: ["--version"]
+transport: ["tcp"]
+cert_paths: []
+listen_ports: []
+stats_kind: ""
+```
+
+模板字段说明：
+
+- `id`：报告中 `type` 字段使用的稳定标识。
+- `name`：便于阅读的服务名称。
+- `units`：匹配 systemd 单元名称的正则表达式，不包含 `.service` 后缀。
+- `binary_patterns`：匹配服务 `ExecStart` 路径的正则表达式。
+- `version_cmd`：查询二进制版本时使用的参数。
+- `transport`：信息性的传输方式列表，例如 `tcp` 或 `udp`。
+- `cert_paths`：可选，用于检查 TLS 证书到期时间的路径。
+- `listen_ports`：可选，`listen_ok` 为 true 时必须存在的端口列表。
+- `stats_kind`：可选，服务专用的统计类型标识。
+
+添加或修改模板后，重启 timer 让下一次运行生效：
+
+```bash
+sudo systemctl restart net-probe.timer
+```
+
