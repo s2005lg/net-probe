@@ -67,6 +67,7 @@ export interface Node {
   status: NodeStatus;
   host: Host;
   services: Service[];
+  ip_location?: string;
 }
 
 export interface NodesResponse {

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/s2005lg/net-probe/internal/panel/auth"
@@ -14,10 +15,13 @@ type Server struct {
 	db         *sql.DB
 	cfg        *config.Config
 	ConfigPath string
+
+	geoMu    sync.Mutex
+	geoCache map[string]string
 }
 
 func New(d *sql.DB, cfg *config.Config) *Server {
-	return &Server{db: d, cfg: cfg}
+	return &Server{db: d, cfg: cfg, geoCache: map[string]string{}}
 }
 
 func (s *Server) Routes() http.Handler {

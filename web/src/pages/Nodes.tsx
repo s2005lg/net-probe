@@ -122,6 +122,7 @@ export default function NodesPage() {
             <tr className="border-b border-edge">
               <th className="px-3 py-2 font-medium">名称</th>
               <th className="px-3 py-2 font-medium">IP</th>
+              <th className="px-3 py-2 font-medium">IP出口地址</th>
               <th className="px-3 py-2 font-medium">服务</th>
               <th className="px-3 py-2 font-medium">版本</th>
               <th className="px-3 py-2 font-medium">状态</th>
@@ -147,6 +148,7 @@ export default function NodesPage() {
                   ) : null}
                 </td>
                 <td className="px-3 py-2 text-muted">{n.host.ipv4 || n.host.ipv6 || "—"}</td>
+                <td className="px-3 py-2 text-muted">{n.ip_location || "—"}</td>
                 <td className="px-3 py-2 text-muted">
                   {n.services.filter((s) => s.type !== "generic").map((s) => s.type).join(", ") || "—"}
                 </td>
@@ -186,7 +188,7 @@ export default function NodesPage() {
             ))}
             {!loading && nodes.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-3 py-6 text-center text-muted">
+                <td colSpan={8} className="px-3 py-6 text-center text-muted">
                   暂无节点
                 </td>
               </tr>
