@@ -10,6 +10,7 @@ export default function NodesPage() {
   const [params, setParams] = useSearchParams();
   const [nodes, setNodes] = useState<Node[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
+  const [tagsLoaded, setTagsLoaded] = useState(false);
   const [total, setTotal] = useState(0);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -22,8 +23,31 @@ export default function NodesPage() {
   const page = Math.max(1, Number(params.get("page") ?? "1") || 1);
 
   useEffect(() => {
-    api.tags().then(setTags).catch((e) => setError(e instanceof Error ? e.message : String(e)));
+    let cancelled = false;
+    api.tags()
+      .then((items) => {
+        if (!cancelled) {
+          setTags(items);
+          setTagsLoaded(true);
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [refreshKey]);
+
+  useEffect(() => {
+    if (!tagsLoaded) return;
+    if (tag && !tags.some((item) => item.name === tag)) {
+      const next = new URLSearchParams(params);
+      next.delete("tag");
+      next.delete("page");
+      setParams(next);
+    }
+  }, [tag, tags, tagsLoaded, params, setParams]);
 
   useEffect(() => {
     let cancelled = false;
