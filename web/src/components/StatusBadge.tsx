@@ -7,6 +7,9 @@ const MAP: Record<string, { color: string; label: string }> = {
   upgradable: { color: "var(--color-warn)", label: "可升级" },
   latest: { color: "var(--color-ok)", label: "已是最新" },
   unknown: { color: "var(--color-muted)", label: "未知" },
+  ok: { color: "var(--color-ok)", label: "正常" },
+  warn: { color: "var(--color-warn)", label: "警告" },
+  error: { color: "var(--color-danger)", label: "异常" },
 };
 
 export default function StatusBadge({ status }: { status: string }) {

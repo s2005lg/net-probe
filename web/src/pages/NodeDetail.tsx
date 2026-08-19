@@ -119,7 +119,7 @@ export default function NodeDetailPage() {
               <div key={`${s.type}-${i}`} className="rounded border border-edge bg-surface p-3">
                 <div className="flex items-center justify-between">
                   <span className="font-medium text-fg">{s.type}</span>
-                  <StatusBadge status={s.active ? "online" : "offline"} />
+                  <StatusBadge status={s.status || (s.active ? "online" : "offline")} />
                 </div>
                 <dl className="mt-2 space-y-1 text-sm text-muted">
                   <Row label="版本" value={s.version || "—"} />

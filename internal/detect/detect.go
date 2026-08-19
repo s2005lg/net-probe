@@ -15,6 +15,8 @@ type Deps struct {
 	ProcRoot string
 }
 
+const certWarnDays = 30
+
 func Detect(ctx context.Context, reg *Registry, cfg config.DetectConfig, statsCfg config.StatsConfig, deps Deps) ([]report.Service, error) {
 	procRoot := deps.ProcRoot
 	if procRoot == "" {
@@ -78,13 +80,26 @@ func Detect(ctx context.Context, reg *Registry, cfg config.DetectConfig, statsCf
 				}
 			}
 		}
-		if !svc.Active {
-			svc.Status = "error"
-			svc.Error = "service not active"
-		}
+		svc.Status, svc.Error = classifyServiceStatus(svc.Active, svc.Cert, len(tmpl.ListenPorts) > 0, svc.ListenOK)
 		out = append(out, svc)
 	}
 	return out, nil
+}
+
+func classifyServiceStatus(active bool, cert *report.Cert, hasDeclaredPorts, listenOK bool) (status, errMsg string) {
+	if !active {
+		return "error", "service not active"
+	}
+	if cert != nil && cert.DaysLeft < 0 {
+		return "error", "certificate expired"
+	}
+	if cert != nil && cert.DaysLeft < certWarnDays {
+		return "warn", ""
+	}
+	if hasDeclaredPorts && !listenOK {
+		return "warn", ""
+	}
+	return "ok", ""
 }
 
 func statsEndpointFor(tmpl Template, statsCfg config.StatsConfig) (string, string, bool) {
