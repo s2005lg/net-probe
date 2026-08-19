@@ -59,8 +59,39 @@ curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/uninstall.sh
 This stops and disables the timer, removes the binary, config directory,
 systemd units, and the `net-probe` system user, leaving no residue.
 
-> A one-line installer for the panel is planned and will be documented here
-> when it is available.
+## Install the panel
+
+The `net-probe-panel` is a single binary with the web UI embedded. It listens
+on `:8443` with a self-signed certificate and stores data in SQLite:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install-panel.sh | sudo bash
+```
+
+The installer generates a random agent token and admin password and prints both
+at the end. To pin a version or preset them:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install-panel.sh | \
+  sudo NET_PROBE_PANEL_VERSION=v0.2.0 \
+       NET_PROBE_PANEL_AGENT_TOKEN="agent-token" \
+       NET_PROBE_PANEL_ADMIN_PASSWORD="admin-password" bash
+```
+
+The panel:
+
+- writes the binary to `/usr/local/bin/net-probe-panel`
+- creates the `net-probe-panel` system user
+- writes config to `/etc/net-probe-panel/config.toml` and the admin password
+  to `/etc/net-probe-panel/panel.env` (mode `0600`)
+- installs and enables the `net-probe-panel` systemd service
+- listens on `:8443` and generates a long-lived self-signed certificate on
+  first start
+
+Open `https://<panel-ip>:8443` in a browser (accept the self-signed
+certificate) and log in with the admin password. Agent sinks must set
+`tls_skip_verify = true` (or point `tls_ca_file` at the panel cert) because the
+certificate is self-signed.
 
 ## Minimal configuration
 
