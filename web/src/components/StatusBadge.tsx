@@ -4,6 +4,9 @@ const MAP: Record<string, { color: string; label: string }> = {
   firing: { color: "var(--color-danger)", label: "告警中" },
   recovered: { color: "var(--color-warn)", label: "已恢复" },
   acknowledged: { color: "var(--color-muted)", label: "已确认" },
+  upgradable: { color: "var(--color-warn)", label: "可升级" },
+  latest: { color: "var(--color-ok)", label: "已是最新" },
+  unknown: { color: "var(--color-muted)", label: "未知" },
 };
 
 export default function StatusBadge({ status }: { status: string }) {
