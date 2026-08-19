@@ -34,13 +34,14 @@ type nodeListResponse struct {
 const nodeSelect = `SELECT node_id, COALESCE(alias,''), COALESCE(muted_until,0), COALESCE(last_report_at,0), COALESCE(last_host_json,'{}'), COALESCE(last_services_json,'[]') FROM nodes`
 
 type metricRow struct {
-	TS          int64   `json:"ts"`
-	Granularity string  `json:"granularity"`
-	Load1       float64 `json:"load1"`
-	Load5       float64 `json:"load5"`
-	Load15      float64 `json:"load15"`
-	MemUsedPct  float64 `json:"mem_used_pct"`
-	DiskUsedPct float64 `json:"disk_used_pct"`
+	TS          int64           `json:"ts"`
+	Granularity string          `json:"granularity"`
+	Load1       float64         `json:"load1"`
+	Load5       float64         `json:"load5"`
+	Load15      float64         `json:"load15"`
+	MemUsedPct  float64         `json:"mem_used_pct"`
+	DiskUsedPct float64         `json:"disk_used_pct"`
+	Services    json.RawMessage `json:"services_json"`
 }
 
 func scanNode(scanner interface{ Scan(...any) error }) (nodeRow, error) {
@@ -321,8 +322,24 @@ func (s *Server) handleNodeMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	granularity := r.URL.Query().Get("granularity")
-	rows, err := s.db.Query(`SELECT ts, granularity, COALESCE(load1,0), COALESCE(load5,0), COALESCE(load15,0), COALESCE(mem_used_pct,0), COALESCE(disk_used_pct,0)
-		FROM metrics WHERE node_id=? AND (?='' OR granularity=?) ORDER BY ts ASC`, nodeID, granularity, granularity)
+	q := `SELECT ts, granularity, COALESCE(load1,0), COALESCE(load5,0), COALESCE(load15,0), COALESCE(mem_used_pct,0), COALESCE(disk_used_pct,0), COALESCE(services_json,'[]')
+		FROM metrics WHERE node_id=? AND (?='' OR granularity=?)`
+	args := []any{nodeID, granularity, granularity}
+	if from := r.URL.Query().Get("from"); from != "" {
+		if ts, err := strconv.ParseInt(from, 10, 64); err == nil {
+			q += ` AND ts >= ?`
+			args = append(args, ts)
+		}
+	}
+	if to := r.URL.Query().Get("to"); to != "" {
+		if ts, err := strconv.ParseInt(to, 10, 64); err == nil {
+			q += ` AND ts <= ?`
+			args = append(args, ts)
+		}
+	}
+	q += ` ORDER BY ts ASC`
+
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
 		return
@@ -332,10 +349,12 @@ func (s *Server) handleNodeMetrics(w http.ResponseWriter, r *http.Request) {
 	out := make([]metricRow, 0)
 	for rows.Next() {
 		var m metricRow
-		if err := rows.Scan(&m.TS, &m.Granularity, &m.Load1, &m.Load5, &m.Load15, &m.MemUsedPct, &m.DiskUsedPct); err != nil {
+		var servicesRaw string
+		if err := rows.Scan(&m.TS, &m.Granularity, &m.Load1, &m.Load5, &m.Load15, &m.MemUsedPct, &m.DiskUsedPct, &servicesRaw); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
 			return
 		}
+		m.Services = json.RawMessage(servicesRaw)
 		out = append(out, m)
 	}
 	if err := rows.Err(); err != nil {
@@ -540,9 +559,17 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 		COALESCE(n.last_host_json,'{}')
 		FROM alerts a LEFT JOIN nodes n ON n.node_id = a.node_id`
 	args := []any{}
+	conditions := []string{}
 	if status := r.URL.Query().Get("status"); status != "" {
-		q += ` WHERE a.status=?`
+		conditions = append(conditions, "a.status=?")
 		args = append(args, status)
+	}
+	if nodeID := r.URL.Query().Get("node_id"); nodeID != "" {
+		conditions = append(conditions, "a.node_id=?")
+		args = append(args, nodeID)
+	}
+	if len(conditions) > 0 {
+		q += ` WHERE ` + strings.Join(conditions, " AND ")
 	}
 	q += ` ORDER BY COALESCE(a.last_seen_at,0) DESC`
 

@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import {
+  Area,
+  AreaChart,
   CartesianGrid,
   Legend,
   Line,
@@ -11,7 +13,7 @@ import {
   YAxis,
 } from "recharts";
 import StatusBadge from "../components/StatusBadge";
-import { api, nodeName, type Metric, type Node } from "../lib/api";
+import { api, nodeName, type Alert, type Metric, type Node, type Service } from "../lib/api";
 import {
   formatBytes,
   formatClock,
@@ -25,6 +27,7 @@ export default function NodeDetailPage() {
   const { id = "" } = useParams();
   const [node, setNode] = useState<Node | null>(null);
   const [metrics, setMetrics] = useState<Metric[]>([]);
+  const [alerts, setAlerts] = useState<Alert[]>([]);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -33,10 +36,15 @@ export default function NodeDetailPage() {
     let cancelled = false;
     async function load(initial: boolean) {
       try {
-        const [n, m] = await Promise.all([api.node(id), api.nodeMetrics(id)]);
+        const [n, m, a] = await Promise.all([
+          api.node(id),
+          api.nodeMetrics(id),
+          api.alerts(undefined, id),
+        ]);
         if (cancelled) return;
         setNode(n);
         setMetrics(m);
+        setAlerts(a);
         if (initial) setError("");
       } catch (e) {
         if (cancelled) return;
@@ -57,6 +65,25 @@ export default function NodeDetailPage() {
   if (!node) return <p className="text-muted">加载中…</p>;
 
   const { host } = node;
+  const trafficData = metrics
+    .map((metric) => {
+      let tx = 0;
+      let rx = 0;
+      if (metric.services_json) {
+        try {
+          const services = JSON.parse(metric.services_json) as Service[];
+          for (const service of services) {
+            tx += service.stats?.tx ?? 0;
+            rx += service.stats?.rx ?? 0;
+          }
+        } catch {
+          // Ignore malformed services_json rows.
+        }
+      }
+      return { ts: metric.ts, tx, rx };
+    })
+    .filter((point) => point.tx > 0 || point.rx > 0);
+
   const rangeLabel =
     metrics.length > 0
       ? `${formatDate(metrics[0].ts)} ~ ${formatDate(metrics[metrics.length - 1].ts)}`
@@ -126,6 +153,53 @@ export default function NodeDetailPage() {
             usedPct={host.disk_used_pct}
           />
         </div>
+      </section>
+
+      <section className="rounded border border-edge bg-panel p-4">
+        <h2 className="mb-3 font-head text-fg">流量趋势</h2>
+        {trafficData.length === 0 ? (
+          <p className="text-muted">暂无流量数据</p>
+        ) : (
+          <ResponsiveContainer width="100%" height={220}>
+            <AreaChart data={trafficData}>
+              <CartesianGrid stroke="var(--color-edge)" strokeDasharray="3 3" />
+              <XAxis
+                dataKey="ts"
+                tickFormatter={(v) => formatClock(Number(v))}
+                minTickGap={24}
+                stroke="var(--color-muted)"
+              />
+              <YAxis stroke="var(--color-muted)" />
+              <Tooltip
+                labelFormatter={(v) => formatTime(Number(v))}
+                formatter={(value, name) => [`${formatBytes(Number(value))}`, name]}
+              />
+              <Legend />
+              <Area type="monotone" dataKey="rx" name="下行" stroke="var(--color-ok)" fill="var(--color-ok)" fillOpacity={0.25} />
+              <Area type="monotone" dataKey="tx" name="上行" stroke="var(--color-warn)" fill="var(--color-warn)" fillOpacity={0.25} />
+            </AreaChart>
+          </ResponsiveContainer>
+        )}
+      </section>
+
+      <section className="rounded border border-edge bg-panel p-4">
+        <h2 className="mb-3 font-head text-fg">节点告警</h2>
+        {alerts.length === 0 ? (
+          <p className="text-muted">暂无告警</p>
+        ) : (
+          <div className="space-y-2">
+            {alerts.map((alert) => (
+              <div key={alert.id} className="flex items-center justify-between rounded border border-edge bg-surface px-3 py-2">
+                <div className="flex items-center gap-3">
+                  <StatusBadge status={alert.status} />
+                  <span className="text-fg">{alert.rule}</span>
+                  <span className="text-muted">{alert.message}</span>
+                </div>
+                <span className="text-xs text-muted">{formatTime(alert.last_seen_at)}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       <section className="rounded border border-edge bg-panel p-4">

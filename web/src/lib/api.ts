@@ -129,6 +129,7 @@ export interface Metric {
   load15: number;
   mem_used_pct: number;
   disk_used_pct: number;
+  services_json?: string;
 }
 
 export interface SettingsData {
@@ -198,14 +199,25 @@ export const api = {
     request<Tag>("/tags", { method: "POST", body: JSON.stringify({ name }) }),
   deleteTag: (id: number) =>
     request<{ deleted: boolean }>(`/tags/${id}`, { method: "DELETE" }),
-  nodeMetrics: (id: string, granularity?: string) =>
-    request<Metric[]>(
-      `/nodes/${encodeURIComponent(id)}/metrics${
-        granularity ? `?granularity=${encodeURIComponent(granularity)}` : ""
-      }`,
-    ),
-  alerts: (status?: string) =>
-    request<Alert[]>(`/alerts${status ? `?status=${encodeURIComponent(status)}` : ""}`),
+  nodeMetrics: (
+    id: string,
+    granularity?: string,
+    range?: { from?: number; to?: number },
+  ) => {
+    const query = new URLSearchParams();
+    if (granularity) query.set("granularity", granularity);
+    if (range?.from) query.set("from", String(range.from));
+    if (range?.to) query.set("to", String(range.to));
+    const qs = query.toString();
+    return request<Metric[]>(`/nodes/${encodeURIComponent(id)}/metrics${qs ? `?${qs}` : ""}`);
+  },
+  alerts: (status?: string, nodeId?: string) => {
+    const query = new URLSearchParams();
+    if (status) query.set("status", status);
+    if (nodeId) query.set("node_id", nodeId);
+    const qs = query.toString();
+    return request<Alert[]>(`/alerts${qs ? `?${qs}` : ""}`);
+  },
   ackAlert: (id: number) =>
     request<{ ok: boolean }>(`/alerts/${id}/ack`, { method: "POST" }),
   versions: () => request<VersionRow[]>("/versions"),
