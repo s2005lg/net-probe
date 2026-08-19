@@ -378,7 +378,7 @@ type tagRow struct {
 }
 
 func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(`SELECT t.id, t.name, COUNT(nt.node_id) FROM tags t LEFT JOIN node_tags nt ON nt.tag_id=t.id GROUP BY t.id ORDER BY t.name`)
+	rows, err := s.db.Query(`SELECT t.id, t.name, COUNT(nt.node_id) FROM tags t LEFT JOIN node_tags nt ON nt.tag_id=t.id GROUP BY t.id HAVING COUNT(nt.node_id) > 0 ORDER BY t.name`)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
 		return
