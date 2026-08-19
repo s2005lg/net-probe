@@ -29,6 +29,10 @@ export default function NodeDetailPage() {
   const [metrics, setMetrics] = useState<Metric[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [error, setError] = useState("");
+  const [range, setRange] = useState<{ from?: number; to?: number }>({});
+  const [fromInput, setFromInput] = useState("");
+  const [toInput, setToInput] = useState("");
+  const [rangeError, setRangeError] = useState("");
 
   useEffect(() => {
     if (!id) return;
@@ -38,7 +42,7 @@ export default function NodeDetailPage() {
       try {
         const [n, m, a] = await Promise.all([
           api.node(id),
-          api.nodeMetrics(id),
+          api.nodeMetrics(id, undefined, range),
           api.alerts(undefined, id),
         ]);
         if (cancelled) return;
@@ -59,7 +63,7 @@ export default function NodeDetailPage() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [id]);
+  }, [id, range]);
 
   if (error) return <p className="text-danger">{error}</p>;
   if (!node) return <p className="text-muted">加载中…</p>;
@@ -90,6 +94,29 @@ export default function NodeDetailPage() {
       : "";
   const memUsed = host.mem_total_bytes - host.mem_available_bytes;
 
+  function toUnix(value: string): number | undefined {
+    if (!value) return undefined;
+    const ms = new Date(value).getTime();
+    return Number.isFinite(ms) ? Math.floor(ms / 1000) : undefined;
+  }
+
+  function applyRange() {
+    const from = toUnix(fromInput);
+    const to = toUnix(toInput);
+    if (from && to && from > to) {
+      setRangeError("开始时间不能晚于结束时间");
+      return;
+    }
+    setRangeError("");
+    setRange({ from, to });
+  }
+
+  function resetRange() {
+    setFromInput("");
+    setToInput("");
+    setRange({});
+  }
+
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
@@ -100,6 +127,42 @@ export default function NodeDetailPage() {
           </p>
         </div>
         <StatusBadge status={node.status} />
+      </div>
+
+      <div className="flex flex-wrap items-end gap-3 rounded border border-edge bg-panel p-3">
+        <label className="flex flex-col gap-1 text-xs text-muted">
+          开始时间
+          <input
+            type="datetime-local"
+            value={fromInput}
+            onChange={(e) => setFromInput(e.target.value)}
+            className="rounded border border-edge bg-surface px-2 py-1.5 text-sm text-fg outline-none focus:border-ok"
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-muted">
+          结束时间
+          <input
+            type="datetime-local"
+            value={toInput}
+            onChange={(e) => setToInput(e.target.value)}
+            className="rounded border border-edge bg-surface px-2 py-1.5 text-sm text-fg outline-none focus:border-ok"
+          />
+        </label>
+        <button
+          type="button"
+          onClick={applyRange}
+          className="rounded border border-edge px-3 py-1.5 text-sm text-muted transition-colors hover:border-ok hover:text-ok"
+        >
+          应用
+        </button>
+        <button
+          type="button"
+          onClick={resetRange}
+          className="rounded border border-edge px-3 py-1.5 text-sm text-muted transition-colors hover:text-fg"
+        >
+          重置
+        </button>
+        {rangeError ? <p className="text-sm text-danger">{rangeError}</p> : null}
       </div>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
