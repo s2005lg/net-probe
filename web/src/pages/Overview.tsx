@@ -40,6 +40,8 @@ export default function OverviewPage() {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [nodes, setNodes] = useState<Node[]>([]);
   const [selectedType, setSelectedType] = useState<string | null>(null);
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -108,6 +110,11 @@ export default function OverviewPage() {
         })
     : [];
 
+  const focusNodeId = hoveredNodeId ?? selectedNodeId;
+  const selectedNode = selectedNodeId
+    ? nodes.find((node) => node.node_id === selectedNodeId) ?? null
+    : null;
+
   const kpis = [
     { label: "节点总数", value: overview.nodes_total, to: "/nodes" },
     { label: "在线", value: overview.nodes_online, to: "/nodes?status=online" },
@@ -137,7 +144,7 @@ export default function OverviewPage() {
         ) : (
           <>
             <ResponsiveContainer width="100%" height={280}>
-              <BarChart data={chartData}>
+              <BarChart data={chartData} onMouseLeave={() => setHoveredNodeId(null)}>
                 <XAxis dataKey="type" stroke="var(--color-muted)" />
                 <YAxis allowDecimals={false} stroke="var(--color-muted)" />
                 <Tooltip
@@ -149,6 +156,17 @@ export default function OverviewPage() {
                     const node = nodeAgg.find((item) => item.node.node_id === value);
                     return node ? nodeLabel(node.node) : value;
                   }}
+                  onMouseEnter={(data: { dataKey?: string | number }) => {
+                    const key = String(data.dataKey ?? "");
+                    setHoveredNodeId(key === "other" || key === "" ? null : key);
+                  }}
+                  onMouseLeave={() => setHoveredNodeId(null)}
+                  onClick={(data: { dataKey?: string | number }) => {
+                    const key = String(data.dataKey ?? "");
+                    if (key === "other" || key === "") return;
+                    setSelectedType(null);
+                    setSelectedNodeId((prev) => (prev === key ? null : key));
+                  }}
                 />
                 {topNodes.map((item, index) => (
                   <Bar
@@ -157,8 +175,13 @@ export default function OverviewPage() {
                     stackId="nodes"
                     name={nodeLabel(item.node)}
                     fill={NODE_COLORS[index % NODE_COLORS.length]}
+                    fillOpacity={focusNodeId && focusNodeId !== item.node.node_id ? 0.25 : 1}
                     radius={[0, 0, 0, 0]}
-                    onClick={(entry) => setSelectedType(entry.type)}
+                    onMouseEnter={() => setHoveredNodeId(item.node.node_id)}
+                    onClick={(entry) => {
+                      setSelectedNodeId(null);
+                      setSelectedType(entry.type);
+                    }}
                   />
                 ))}
                 {otherNodes.length > 0 ? (
@@ -167,8 +190,12 @@ export default function OverviewPage() {
                     stackId="nodes"
                     name="其他"
                     fill={OTHER_COLOR}
+                    fillOpacity={focusNodeId ? 0.25 : 1}
                     radius={[0, 0, 0, 0]}
-                    onClick={(entry) => setSelectedType(entry.type)}
+                    onClick={(entry) => {
+                      setSelectedNodeId(null);
+                      setSelectedType(entry.type);
+                    }}
                   />
                 ) : null}
               </BarChart>
@@ -216,6 +243,58 @@ export default function OverviewPage() {
                     <td className="px-3 py-2">
                       <StatusBadge status={node.status} />
                     </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
+
+      {selectedNode ? (
+        <section className="rounded border border-edge bg-panel p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <h2 className="font-head text-fg">
+                <Link
+                  to={`/nodes/${encodeURIComponent(selectedNode.node_id)}`}
+                  className="hover:text-ok"
+                >
+                  {nodeLabel(selectedNode)}
+                </Link>{" "}
+                节点明细
+              </h2>
+              <StatusBadge status={selectedNode.status} />
+            </div>
+            <button
+              type="button"
+              onClick={() => setSelectedNodeId(null)}
+              className="rounded border border-edge px-2 py-1 text-sm text-muted transition-colors hover:border-ok hover:text-fg"
+            >
+              关闭
+            </button>
+          </div>
+          <div className="max-h-80 overflow-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="text-muted">
+                <tr>
+                  <th className="px-3 py-2">服务类型</th>
+                  <th className="px-3 py-2">版本</th>
+                  <th className="px-3 py-2">状态</th>
+                  <th className="px-3 py-2">Tx</th>
+                  <th className="px-3 py-2">Rx</th>
+                  <th className="px-3 py-2">在线连接</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-edge">
+                {selectedNode.services.map((service) => (
+                  <tr key={`${service.type}-${service.unit || service.binary || service.main_pid || ""}`} className="hover:bg-surface">
+                    <td className="px-3 py-2 text-fg">{service.type}</td>
+                    <td className="px-3 py-2 text-fg">{service.version || "—"}</td>
+                    <td className="px-3 py-2 text-fg">{service.active ? "运行中" : "已停止"}</td>
+                    <td className="px-3 py-2 text-fg">{service.stats?.tx ?? "—"}</td>
+                    <td className="px-3 py-2 text-fg">{service.stats?.rx ?? "—"}</td>
+                    <td className="px-3 py-2 text-fg">{service.stats?.online_clients ?? "—"}</td>
                   </tr>
                 ))}
               </tbody>
