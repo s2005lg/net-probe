@@ -29,12 +29,28 @@ export default function NodeDetailPage() {
 
   useEffect(() => {
     if (!id) return;
-    Promise.all([api.node(id), api.nodeMetrics(id)])
-      .then(([n, m]) => {
+
+    let cancelled = false;
+    async function load(initial: boolean) {
+      try {
+        const [n, m] = await Promise.all([api.node(id), api.nodeMetrics(id)]);
+        if (cancelled) return;
         setNode(n);
         setMetrics(m);
-      })
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+        if (initial) setError("");
+      } catch (e) {
+        if (cancelled) return;
+        if (initial) setError(e instanceof Error ? e.message : String(e));
+        // Polling failures keep the last known data; no full-page error.
+      }
+    }
+
+    load(true);
+    const timer = setInterval(() => load(false), 30000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, [id]);
 
   if (error) return <p className="text-danger">{error}</p>;
