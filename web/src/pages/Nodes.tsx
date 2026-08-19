@@ -23,7 +23,7 @@ export default function NodesPage() {
 
   useEffect(() => {
     api.tags().then(setTags).catch((e) => setError(e instanceof Error ? e.message : String(e)));
-  }, []);
+  }, [refreshKey]);
 
   useEffect(() => {
     let cancelled = false;
