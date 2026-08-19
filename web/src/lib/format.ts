@@ -1,6 +1,22 @@
+function pad(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+export function formatDate(ts: number): string {
+  if (!ts) return "";
+  const d = new Date(ts * 1000);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+export function formatClock(ts: number): string {
+  if (!ts) return "";
+  const d = new Date(ts * 1000);
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 export function formatTime(ts: number): string {
   if (!ts) return "—";
-  return new Date(ts * 1000).toLocaleString("zh-CN", { hour12: false });
+  return `${formatDate(ts)} ${formatClock(ts)}`;
 }
 
 export function formatRelative(ts: number): string {

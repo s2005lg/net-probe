@@ -12,7 +12,14 @@ import {
 } from "recharts";
 import StatusBadge from "../components/StatusBadge";
 import { api, type Metric, type Node } from "../lib/api";
-import { formatBytes, formatRelative, formatTime, formatUptime } from "../lib/format";
+import {
+  formatBytes,
+  formatClock,
+  formatDate,
+  formatRelative,
+  formatTime,
+  formatUptime,
+} from "../lib/format";
 
 export default function NodeDetailPage() {
   const { id = "" } = useParams();
@@ -34,6 +41,10 @@ export default function NodeDetailPage() {
   if (!node) return <p className="text-muted">加载中…</p>;
 
   const { host } = node;
+  const rangeLabel =
+    metrics.length > 0
+      ? `${formatDate(metrics[0].ts)} ~ ${formatDate(metrics[metrics.length - 1].ts)}`
+      : "";
 
   return (
     <div className="space-y-5">
@@ -83,7 +94,8 @@ export default function NodeDetailPage() {
       </section>
 
       <section className="rounded border border-edge bg-panel p-4">
-        <h2 className="mb-3 font-head text-fg">资源趋势</h2>
+        <h2 className="font-head text-fg">资源趋势</h2>
+        {rangeLabel && <p className="mt-1 mb-3 text-xs text-muted">{rangeLabel}</p>}
         {metrics.length === 0 ? (
           <p className="text-muted">暂无历史数据</p>
         ) : (
@@ -95,7 +107,8 @@ export default function NodeDetailPage() {
                   <CartesianGrid stroke="var(--color-edge)" strokeDasharray="3 3" />
                   <XAxis
                     dataKey="ts"
-                    tickFormatter={(v) => formatTime(Number(v))}
+                    tickFormatter={(v) => formatClock(Number(v))}
+                    minTickGap={24}
                     stroke="var(--color-muted)"
                   />
                   <YAxis stroke="var(--color-muted)" domain={[0, "auto"]} />
@@ -114,7 +127,8 @@ export default function NodeDetailPage() {
                   <CartesianGrid stroke="var(--color-edge)" strokeDasharray="3 3" />
                   <XAxis
                     dataKey="ts"
-                    tickFormatter={(v) => formatTime(Number(v))}
+                    tickFormatter={(v) => formatClock(Number(v))}
+                    minTickGap={24}
                     stroke="var(--color-muted)"
                   />
                   <YAxis
