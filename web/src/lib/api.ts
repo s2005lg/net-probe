@@ -84,7 +84,7 @@ export interface Tag {
 }
 
 export function nodeName(node: Node): string {
-  return node.host.hostname || node.alias || node.node_id;
+  return node.alias || node.host.hostname || node.node_id;
 }
 
 export interface ServiceDist {
