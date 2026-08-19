@@ -41,7 +41,7 @@ export default function OverviewPage() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    Promise.all([api.overview(), api.nodes()])
+    Promise.all([api.overview(), api.nodes().then((response) => response.items)])
       .then(([o, n]) => {
         setOverview(o);
         setNodes(n);

@@ -18,7 +18,7 @@ export default function VersionsPage() {
   useEffect(() => {
     let cancelled = false;
 
-    Promise.all([api.nodes(), api.versions()])
+    Promise.all([api.nodes().then((response) => response.items), api.versions()])
       .then(([nodes, versions]) => {
         if (cancelled) return;
 

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/s2005lg/net-probe/internal/panel/auth"
@@ -14,11 +16,19 @@ import (
 type nodeRow struct {
 	NodeID       string          `json:"node_id"`
 	Alias        string          `json:"alias"`
+	Tags         []string        `json:"tags"`
 	MutedUntil   int64           `json:"muted_until"`
 	LastReportAt int64           `json:"last_report_at"`
 	Host         json.RawMessage `json:"host"`
 	Services     json.RawMessage `json:"services"`
 	Status       string          `json:"status"`
+}
+
+type nodeListResponse struct {
+	Items    []nodeRow `json:"items"`
+	Total    int       `json:"total"`
+	Page     int       `json:"page"`
+	PageSize int       `json:"page_size"`
 }
 
 const nodeSelect = `SELECT node_id, COALESCE(alias,''), COALESCE(muted_until,0), COALESCE(last_report_at,0), COALESCE(last_host_json,'{}'), COALESCE(last_services_json,'[]') FROM nodes`
@@ -57,7 +67,28 @@ func nodeStatus(lastAt int64, timeout time.Duration) string {
 }
 
 func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(nodeSelect + ` ORDER BY COALESCE(last_report_at,0) DESC`)
+	q := r.URL.Query()
+	page := parseIntDefault(q.Get("page"), 1)
+	pageSize := parseIntDefault(q.Get("page_size"), 10)
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 10
+	}
+	if pageSize > 100 {
+		pageSize = 100
+	}
+
+	where, args := nodeFilter(q, s.nodeTimeout())
+	var total int
+	if err := s.db.QueryRow(`SELECT count(*) FROM nodes WHERE `+where, args...).Scan(&total); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
+		return
+	}
+
+	args = append(args, pageSize, (page-1)*pageSize)
+	rows, err := s.db.Query(nodeSelect+` WHERE `+where+` ORDER BY COALESCE(last_report_at,0) DESC LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
 		return
@@ -65,21 +96,81 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	out := make([]nodeRow, 0)
-	timeout := s.nodeTimeout()
 	for rows.Next() {
 		n, err := scanNode(rows)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
 			return
 		}
-		n.Status = nodeStatus(n.LastReportAt, timeout)
+		n.Status = nodeStatus(n.LastReportAt, s.nodeTimeout())
+		n.Tags, err = tagsForNode(s.db, n.NodeID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
+			return
+		}
 		out = append(out, n)
 	}
 	if err := rows.Err(); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, nodeListResponse{Items: out, Total: total, Page: page, PageSize: pageSize})
+}
+
+func nodeFilter(q map[string][]string, timeout time.Duration) (string, []any) {
+	where := "1=1"
+	args := []any{}
+	if status := firstQuery(q, "status"); status != "" {
+		if status == "online" {
+			where += " AND COALESCE(last_report_at,0) >= ?"
+			args = append(args, time.Now().Add(-timeout).Unix())
+		} else if status == "offline" {
+			where += " AND COALESCE(last_report_at,0) < ?"
+			args = append(args, time.Now().Add(-timeout).Unix())
+		}
+	}
+	if search := firstQuery(q, "q"); search != "" {
+		like := "%" + strings.ToLower(search) + "%"
+		where += " AND (LOWER(node_id) LIKE ? OR LOWER(COALESCE(alias,'')) LIKE ? OR LOWER(COALESCE(last_host_json,'{}')) LIKE ?)"
+		args = append(args, like, like, like)
+	}
+	if tag := firstQuery(q, "tag"); tag != "" {
+		where += ` AND EXISTS (SELECT 1 FROM node_tags nt JOIN tags t ON t.id=nt.tag_id WHERE nt.node_id=nodes.id AND t.name=?)`
+		args = append(args, tag)
+	}
+	return where, args
+}
+
+func firstQuery(q map[string][]string, key string) string {
+	if values, ok := q[key]; ok && len(values) > 0 {
+		return values[0]
+	}
+	return ""
+}
+
+func parseIntDefault(s string, def int) int {
+	n, err := strconv.Atoi(s)
+	if err != nil || n <= 0 {
+		return def
+	}
+	return n
+}
+
+func tagsForNode(d *sql.DB, nodeID string) ([]string, error) {
+	rows, err := d.Query(`SELECT t.name FROM tags t JOIN node_tags nt ON nt.tag_id=t.id JOIN nodes n ON n.id=nt.node_id WHERE n.node_id=? ORDER BY t.name`, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	tags := make([]string, 0)
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		tags = append(tags, name)
+	}
+	return tags, rows.Err()
 }
 
 func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
@@ -95,6 +186,11 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	n.Status = nodeStatus(n.LastReportAt, s.nodeTimeout())
+	n.Tags, err = tagsForNode(s.db, n.NodeID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
+		return
+	}
 	writeJSON(w, http.StatusOK, n)
 }
 
@@ -105,8 +201,9 @@ func (s *Server) handleNodePatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var in struct {
-		Alias      *string `json:"alias"`
-		MutedUntil *int64  `json:"muted_until"`
+		Alias      *string   `json:"alias"`
+		Tags       *[]string `json:"tags"`
+		MutedUntil *int64    `json:"muted_until"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"code": "bad_request"}})
@@ -135,6 +232,16 @@ func (s *Server) handleNodePatch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if in.Tags != nil {
+		if err := syncNodeTags(s.db, nodeID, *in.Tags); err != nil {
+			if err == sql.ErrNoRows {
+				writeJSON(w, http.StatusNotFound, map[string]any{"error": map[string]any{"code": "not_found"}})
+			} else {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
+			}
+			return
+		}
+	}
 
 	row := s.db.QueryRow(nodeSelect+` WHERE node_id=?`, nodeID)
 	n, err := scanNode(row)
@@ -142,7 +249,39 @@ func (s *Server) handleNodePatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": map[string]any{"code": "not_found"}})
 		return
 	}
+	n.Tags, err = tagsForNode(s.db, n.NodeID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
+		return
+	}
 	writeJSON(w, http.StatusOK, n)
+}
+
+func syncNodeTags(d *sql.DB, nodeID string, tagNames []string) error {
+	var nodePK int64
+	if err := d.QueryRow(`SELECT id FROM nodes WHERE node_id=?`, nodeID).Scan(&nodePK); err != nil {
+		return err
+	}
+	if _, err := d.Exec(`DELETE FROM node_tags WHERE node_id=?`, nodePK); err != nil {
+		return err
+	}
+	for _, raw := range tagNames {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			continue
+		}
+		if _, err := d.Exec(`INSERT INTO tags(name) VALUES(?) ON CONFLICT(name) DO NOTHING`, name); err != nil {
+			return err
+		}
+		var tagID int64
+		if err := d.QueryRow(`SELECT id FROM tags WHERE name=?`, name).Scan(&tagID); err != nil {
+			return err
+		}
+		if _, err := d.Exec(`INSERT OR IGNORE INTO node_tags(node_id,tag_id) VALUES(?,?)`, nodePK, tagID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Server) handleNodeDelete(w http.ResponseWriter, r *http.Request) {
@@ -204,6 +343,79 @@ func (s *Server) handleNodeMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+type tagRow struct {
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	NodeCount int    `json:"node_count"`
+}
+
+func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.db.Query(`SELECT t.id, t.name, COUNT(nt.node_id) FROM tags t LEFT JOIN node_tags nt ON nt.tag_id=t.id GROUP BY t.id ORDER BY t.name`)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
+		return
+	}
+	defer rows.Close()
+
+	out := make([]tagRow, 0)
+	for rows.Next() {
+		var t tagRow
+		if err := rows.Scan(&t.ID, &t.Name, &t.NodeCount); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
+			return
+		}
+		out = append(out, t)
+	}
+	if err := rows.Err(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleTagCreate(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.Name) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"code": "bad_request"}})
+		return
+	}
+	name := strings.TrimSpace(in.Name)
+	if _, err := s.db.Exec(`INSERT INTO tags(name) VALUES(?) ON CONFLICT(name) DO NOTHING`, name); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
+		return
+	}
+	var t tagRow
+	if err := s.db.QueryRow(`SELECT id, name, 0 FROM tags WHERE name=?`, name).Scan(&t.ID, &t.Name, &t.NodeCount); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
+		return
+	}
+	writeJSON(w, http.StatusOK, t)
+}
+
+func (s *Server) handleTagDelete(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"code": "bad_request"}})
+		return
+	}
+	if _, err := s.db.Exec(`DELETE FROM node_tags WHERE tag_id=?`, id); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
+		return
+	}
+	res, err := s.db.Exec(`DELETE FROM tags WHERE id=?`, id)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": map[string]any{"code": "not_found"}})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
 }
 
 type versionRow struct {

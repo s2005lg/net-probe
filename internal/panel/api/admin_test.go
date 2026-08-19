@@ -31,11 +31,14 @@ func TestNodesList(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("code=%d body=%s", rr.Code, rr.Body.String())
 	}
-	var out []map[string]any
+	var out struct {
+		Items []map[string]any `json:"items"`
+		Total int              `json:"total"`
+	}
 	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(out) != 1 || out[0]["node_id"] != "n1" {
+	if len(out.Items) != 1 || out.Total != 1 || out.Items[0]["node_id"] != "n1" {
 		t.Fatalf("nodes=%+v", out)
 	}
 }
@@ -248,5 +251,52 @@ func TestSettings(t *testing.T) {
 	}
 	if out["node_timeout"] != "3m" {
 		t.Fatalf("settings=%+v", out)
+	}
+}
+
+func TestNodeTagsAndFilter(t *testing.T) {
+	d, cfg := openTestDB(t)
+	now := time.Now().Unix()
+	insertTestNode(t, d, "n1", "edge", `{"hostname":"h1"}`, `[{"type":"xray"}]`, now)
+	insertTestNode(t, d, "n2", "core", `{"hostname":"h2"}`, `[{"type":"hysteria2"}]`, now)
+	s := New(d, cfg)
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/admin/nodes/n1", strings.NewReader(`{"tags":["prod","jp"]}`))
+	req.SetPathValue("id", "n1")
+	rr := httptest.NewRecorder()
+	s.handleNodePatch(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("patch code=%d body=%s", rr.Code, rr.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/admin/tags", nil)
+	rr = httptest.NewRecorder()
+	s.handleTags(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("tags code=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var tagOut []map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &tagOut); err != nil {
+		t.Fatalf("decode tags: %v", err)
+	}
+	if len(tagOut) != 2 {
+		t.Fatalf("tags=%+v", tagOut)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/admin/nodes?tag=prod", nil)
+	rr = httptest.NewRecorder()
+	s.handleNodes(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("filter code=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var out struct {
+		Items []map[string]any `json:"items"`
+		Total int              `json:"total"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode filter: %v", err)
+	}
+	if out.Total != 1 || len(out.Items) != 1 || out.Items[0]["node_id"] != "n1" {
+		t.Fatalf("filter=%+v", out)
 	}
 }

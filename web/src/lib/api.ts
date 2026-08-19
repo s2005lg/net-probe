@@ -61,11 +61,25 @@ export type NodeStatus = "online" | "offline";
 export interface Node {
   node_id: string;
   alias: string;
+  tags: string[];
   muted_until: number;
   last_report_at: number;
   status: NodeStatus;
   host: Host;
   services: Service[];
+}
+
+export interface NodesResponse {
+  items: Node[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface Tag {
+  id: number;
+  name: string;
+  node_count: number;
 }
 
 export function nodeName(node: Node): string {
@@ -156,8 +170,34 @@ export const api = {
     }),
   logout: () => request<{ ok: boolean }>("/logout", { method: "POST" }),
   overview: () => request<Overview>("/overview"),
-  nodes: () => request<Node[]>("/nodes"),
+  nodes: (params: { q?: string; status?: string; tag?: string; page?: number; page_size?: number } = {}) => {
+    const query = new URLSearchParams();
+    if (params.q) query.set("q", params.q);
+    if (params.status) query.set("status", params.status);
+    if (params.tag) query.set("tag", params.tag);
+    if (params.page) query.set("page", String(params.page));
+    if (params.page_size) query.set("page_size", String(params.page_size));
+    const qs = query.toString();
+    return request<NodesResponse>(`/nodes${qs ? `?${qs}` : ""}`);
+  },
   node: (id: string) => request<Node>(`/nodes/${encodeURIComponent(id)}`),
+  patchNode: (
+    id: string,
+    body: { alias?: string; muted_until?: number; tags?: string[] },
+  ) =>
+    request<Node>(`/nodes/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  deleteNode: (id: string) =>
+    request<{ deleted: boolean }>(`/nodes/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  tags: () => request<Tag[]>("/tags"),
+  createTag: (name: string) =>
+    request<Tag>("/tags", { method: "POST", body: JSON.stringify({ name }) }),
+  deleteTag: (id: number) =>
+    request<{ deleted: boolean }>(`/tags/${id}`, { method: "DELETE" }),
   nodeMetrics: (id: string, granularity?: string) =>
     request<Metric[]>(
       `/nodes/${encodeURIComponent(id)}/metrics${
