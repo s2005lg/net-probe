@@ -322,12 +322,12 @@ export default function OverviewPage() {
       ) : null}
 
       <section className="rounded border border-edge bg-panel p-4">
-        <h2 className="mb-3 font-head text-fg">最近节点</h2>
+        <h2 className="mb-3 font-head text-fg">全部节点</h2>
         {nodes.length === 0 ? (
           <p className="text-muted">暂无节点</p>
         ) : (
           <ul className="divide-y divide-edge">
-            {nodes.slice(0, 10).map((n) => (
+            {nodes.map((n) => (
               <li key={n.node_id}>
                 <Link
                   to={`/nodes/${n.node_id}`}
