@@ -16,6 +16,7 @@ export default function NodesPage() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Node | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [view, setView] = useState<"table" | "cards">("table");
 
   const q = params.get("q") ?? "";
   const status = params.get("status") ?? "";
@@ -138,9 +139,26 @@ export default function NodesPage() {
             </option>
           ))}
         </select>
+        <div className="ml-auto flex overflow-hidden rounded border border-edge">
+          <button
+            type="button"
+            onClick={() => setView("table")}
+            className={`px-3 py-2 text-sm transition-colors ${view === "table" ? "bg-surface text-fg" : "bg-panel text-muted hover:text-fg"}`}
+          >
+            表格
+          </button>
+          <button
+            type="button"
+            onClick={() => setView("cards")}
+            className={`px-3 py-2 text-sm transition-colors ${view === "cards" ? "bg-surface text-fg" : "bg-panel text-muted hover:text-fg"}`}
+          >
+            卡片
+          </button>
+        </div>
       </div>
 
-      <div className="overflow-x-auto rounded border border-edge bg-panel">
+      {view === "table" ? (
+        <div className="overflow-x-auto rounded border border-edge bg-panel">
         <table className="w-full text-left text-sm">
           <thead className="text-muted">
             <tr className="border-b border-edge">
@@ -184,29 +202,12 @@ export default function NodesPage() {
                 </td>
                 <td className="px-3 py-2 text-muted">{formatRelative(n.last_report_at)}</td>
                 <td className="px-3 py-2">
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setEditing(n)}
-                      className="rounded border border-edge px-2 py-1 text-xs text-muted transition-colors hover:border-ok hover:text-ok"
-                    >
-                      编辑
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => mute(n)}
-                      className="rounded border border-edge px-2 py-1 text-xs text-muted transition-colors hover:border-ok hover:text-ok"
-                    >
-                      {n.muted_until > Math.floor(Date.now() / 1000) ? "取消静音" : "静音 1 小时"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => remove(n)}
-                      className="rounded border border-edge px-2 py-1 text-xs text-muted transition-colors hover:border-danger hover:text-danger"
-                    >
-                      删除
-                    </button>
-                  </div>
+                  <NodeActions
+                    node={n}
+                    onEdit={() => setEditing(n)}
+                    onMute={() => mute(n)}
+                    onRemove={() => remove(n)}
+                  />
                 </td>
               </tr>
             ))}
@@ -219,7 +220,68 @@ export default function NodesPage() {
             )}
           </tbody>
         </table>
-      </div>
+        </div>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {nodes.map((n) => (
+            <div key={n.node_id} className="rounded border border-edge bg-panel p-3">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <Link to={`/nodes/${n.node_id}`} className="font-medium text-fg hover:text-ok">
+                    {nodeName(n)}
+                  </Link>
+                  <div className="mt-0.5 truncate text-xs text-muted">
+                    {n.host.ipv4 || n.host.ipv6 || "—"}
+                  </div>
+                </div>
+                <StatusBadge status={n.status} />
+              </div>
+              {n.tags.length > 0 ? (
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {n.tags.map((item) => (
+                    <span key={item} className="rounded bg-surface px-1.5 py-0.5 text-xs text-muted">
+                      {item}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+              <dl className="mt-3 space-y-1 text-sm text-muted">
+                <div className="flex justify-between gap-2">
+                  <dt>IP出口地址</dt>
+                  <dd className="truncate text-fg">{n.ip_location || "—"}</dd>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <dt>服务</dt>
+                  <dd className="truncate text-fg">
+                    {n.services.filter((s) => s.type !== "generic").map((s) => s.type).join(", ") || "—"}
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <dt>版本</dt>
+                  <dd className="truncate text-fg">
+                    {n.services.filter((s) => s.type !== "generic").map((s) => s.version || s.type).join(", ") || "—"}
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <dt>最后上报</dt>
+                  <dd className="truncate text-fg">{formatRelative(n.last_report_at)}</dd>
+                </div>
+              </dl>
+              <div className="mt-3">
+                <NodeActions
+                  node={n}
+                  onEdit={() => setEditing(n)}
+                  onMute={() => mute(n)}
+                  onRemove={() => remove(n)}
+                />
+              </div>
+            </div>
+          ))}
+          {!loading && nodes.length === 0 && (
+            <p className="col-span-full py-6 text-center text-muted">暂无节点</p>
+          )}
+        </div>
+      )}
 
       <div className="flex items-center gap-3">
         <button
@@ -321,6 +383,44 @@ function NodeEditModal({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function NodeActions({
+  node,
+  onEdit,
+  onMute,
+  onRemove,
+}: {
+  node: Node;
+  onEdit: () => void;
+  onMute: () => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div className="flex gap-2">
+      <button
+        type="button"
+        onClick={onEdit}
+        className="rounded border border-edge px-2 py-1 text-xs text-muted transition-colors hover:border-ok hover:text-ok"
+      >
+        编辑
+      </button>
+      <button
+        type="button"
+        onClick={onMute}
+        className="rounded border border-edge px-2 py-1 text-xs text-muted transition-colors hover:border-ok hover:text-ok"
+      >
+        {node.muted_until > Math.floor(Date.now() / 1000) ? "取消静音" : "静音 1 小时"}
+      </button>
+      <button
+        type="button"
+        onClick={onRemove}
+        className="rounded border border-edge px-2 py-1 text-xs text-muted transition-colors hover:border-danger hover:text-danger"
+      >
+        删除
+      </button>
     </div>
   );
 }
