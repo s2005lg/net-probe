@@ -193,9 +193,11 @@ export default function OverviewPage() {
                     fillOpacity={focusNodeId && focusNodeId !== item.node.node_id ? 0.25 : 1}
                     radius={[0, 0, 0, 0]}
                     onMouseEnter={() => setHoveredNodeId(item.node.node_id)}
-                    onClick={(entry) => {
-                      setSelectedNodeId(null);
-                      setSelectedType(entry.type);
+                    onClick={() => {
+                      setSelectedType(null);
+                      setSelectedNodeId((prev) =>
+                        prev === item.node.node_id ? null : item.node.node_id,
+                      );
                     }}
                   />
                 ))}
@@ -216,7 +218,7 @@ export default function OverviewPage() {
               </BarChart>
             </ResponsiveContainer>
             <p className="mt-2 text-xs text-muted">
-              点击柱状图中的色块，可查看该服务类型的完整节点明细。
+              点击具体节点色块可查看该节点明细；点击“其他”可查看该服务类型的全部节点明细。
             </p>
           </>
         )}
