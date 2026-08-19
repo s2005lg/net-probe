@@ -31,9 +31,27 @@ func NodeID(cfg *config.Config) string {
 			return "m-" + id
 		}
 	}
-	b := make([]byte, 8)
-	_, _ = rand.Read(b)
-	return "g-" + hex.EncodeToString(b)
+	return persistedNodeID()
+}
+
+func persistedNodeID() string {
+	dir := ConfigDir()
+	path := filepath.Join(dir, "node-id")
+	if b, err := os.ReadFile(path); err == nil {
+		id := strings.TrimSpace(string(b))
+		if id != "" {
+			return id
+		}
+	}
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	id := "g-" + hex.EncodeToString(b)
+	if err := os.MkdirAll(dir, 0o755); err == nil {
+		_ = os.WriteFile(path, []byte(id), 0o644)
+	}
+	return id
 }
 
 func allTemplates(cfg *config.Config) ([]detect.Template, error) {

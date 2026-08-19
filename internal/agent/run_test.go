@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -38,5 +40,24 @@ func TestRunExitZero(t *testing.T) {
 	rc := Run(context.Background(), cfg, "0.1.0", fakeRunner{})
 	if rc != 0 {
 		t.Fatalf("rc = %d", rc)
+	}
+}
+
+func TestPersistedNodeID(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	first := persistedNodeID()
+	if first == "" {
+		t.Fatal("empty persisted node id")
+	}
+	if !strings.HasPrefix(first, "g-") {
+		t.Fatalf("id = %q", first)
+	}
+	second := persistedNodeID()
+	if first != second {
+		t.Fatalf("first=%q second=%q", first, second)
+	}
+	if _, err := os.Stat(filepath.Join(ConfigDir(), "node-id")); err != nil {
+		t.Fatalf("node-id file missing: %v", err)
 	}
 }
