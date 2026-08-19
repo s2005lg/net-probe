@@ -29,17 +29,54 @@ fi
 
 install -d -m 0755 /etc/net-probe/services.d
 
-if [ -n "${NET_PROBE_PANEL_URL:-}" ]; then
+# Resolve panel URL and token.
+# Order: environment variables -> same-host panel config -> interactive prompt.
+panel_url="${NET_PROBE_PANEL_URL:-}"
+panel_token="${NET_PROBE_PANEL_TOKEN:-}"
+
+# Same-host auto-discovery: read the local panel config if present.
+if [ -z "$panel_url" ] && [ -r /etc/net-probe-panel/config.toml ]; then
+  local_listen="$(sed -n 's/^listen_addr[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' /etc/net-probe-panel/config.toml | head -n1)"
+  local_port="${local_listen##*:}"
+  case "$local_port" in
+    ''|*[!0-9]*) local_port="" ;;
+  esac
+  local_token="$(sed -n '/^\[agent\]/,/^\[/s/^token[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' /etc/net-probe-panel/config.toml | head -n1)"
+  if [ -n "$local_port" ] && [ -n "$local_token" ]; then
+    panel_url="https://127.0.0.1:${local_port}"
+    panel_token="$local_token"
+    echo "auto-detected local panel: ${panel_url}"
+  fi
+fi
+
+ask() {
+  local _answer=""
+  if [ -t 1 ] && [ -e /dev/tty ]; then
+    printf '%s' "$1" >/dev/tty 2>/dev/null || true
+    IFS= read -r _answer </dev/tty 2>/dev/null || true
+  fi
+  printf '%s\n' "$_answer"
+}
+
+# Interactive fallback (reads from /dev/tty because `curl | bash` uses stdin).
+if [ -z "$panel_url" ]; then
+  panel_url="$(ask 'panel URL (https://host:port): ')"
+fi
+if [ -n "$panel_url" ] && [ -z "$panel_token" ]; then
+  panel_token="$(ask 'panel agent token: ')"
+fi
+
+if [ -n "$panel_url" ]; then
   {
     echo '[[sink]]'
     echo 'type = "panel"'
-    echo "url = \"${NET_PROBE_PANEL_URL}\""
+    echo "url = \"${panel_url}\""
     if [ "${NET_PROBE_PANEL_TLS_SKIP_VERIFY:-1}" != "0" ]; then
       echo 'tls_skip_verify = true'
     fi
-    if [ -n "${NET_PROBE_PANEL_TOKEN:-}" ]; then
+    if [ -n "$panel_token" ]; then
       install -d -m 0755 /etc/net-probe
-      printf '%s\n' "${NET_PROBE_PANEL_TOKEN}" > /etc/net-probe/panel-token
+      printf '%s\n' "$panel_token" > /etc/net-probe/panel-token
       chmod 600 /etc/net-probe/panel-token
       chown net-probe:net-probe /etc/net-probe/panel-token
       echo 'token_file = "/etc/net-probe/panel-token"'
@@ -47,6 +84,9 @@ if [ -n "${NET_PROBE_PANEL_URL:-}" ]; then
   } > /etc/net-probe/config.toml
   chmod 600 /etc/net-probe/config.toml
   chown net-probe:net-probe /etc/net-probe/config.toml
+  if [ -z "$panel_token" ]; then
+    echo "warning: panel token not set; reports will be rejected (401) until /etc/net-probe/panel-token is configured" >&2
+  fi
 else
   cat > /etc/net-probe/config.toml <<'EOF'
 [[sink]]
@@ -55,6 +95,8 @@ url = "https://example.com/net-probe-report"
 EOF
   chmod 600 /etc/net-probe/config.toml
   chown net-probe:net-probe /etc/net-probe/config.toml
+  echo "warning: no panel configured; wrote a placeholder webhook sink to /etc/net-probe/config.toml" >&2
+  echo "         edit it or re-run with NET_PROBE_PANEL_URL / NET_PROBE_PANEL_TOKEN" >&2
 fi
 
 cat > /etc/systemd/system/net-probe.service <<'EOF'
