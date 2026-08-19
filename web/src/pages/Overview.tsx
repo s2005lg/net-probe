@@ -11,6 +11,7 @@ import {
 } from "recharts";
 import StatusBadge from "../components/StatusBadge";
 import { api, nodeName, type Node, type Overview } from "../lib/api";
+import { formatBytes } from "../lib/format";
 
 const TOP_N = 10;
 const NODE_COLORS = [
@@ -298,9 +299,9 @@ export default function OverviewPage() {
                   <th className="px-3 py-2">服务类型</th>
                   <th className="px-3 py-2">版本</th>
                   <th className="px-3 py-2">状态</th>
-                  <th className="px-3 py-2">上行</th>
-                  <th className="px-3 py-2">下行</th>
-                  <th className="px-3 py-2">在线连接</th>
+                  <th className="px-3 py-2">累计上行流量</th>
+                  <th className="px-3 py-2">累计下行流量</th>
+                  <th className="px-3 py-2">在线连接数</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-edge">
@@ -309,8 +310,8 @@ export default function OverviewPage() {
                     <td className="px-3 py-2 text-fg">{service.type}</td>
                     <td className="px-3 py-2 text-fg">{service.version || "—"}</td>
                     <td className="px-3 py-2 text-fg">{service.active ? "运行中" : "已停止"}</td>
-                    <td className="px-3 py-2 text-fg">{service.stats?.tx ?? "—"}</td>
-                    <td className="px-3 py-2 text-fg">{service.stats?.rx ?? "—"}</td>
+                    <td className="px-3 py-2 text-fg">{service.stats ? formatBytes(service.stats.tx) : "—"}</td>
+                    <td className="px-3 py-2 text-fg">{service.stats ? formatBytes(service.stats.rx) : "—"}</td>
                     <td className="px-3 py-2 text-fg">{service.stats?.online_clients ?? "—"}</td>
                   </tr>
                 ))}
