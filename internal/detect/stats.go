@@ -111,7 +111,32 @@ func xrayStats(ctx context.Context, r Runner, server string) (*report.Stats, err
 			s.Rx += v
 		}
 	}
+	if online, err := xrayOnlineClients(ctx, r, server); err == nil {
+		s.OnlineClients = online
+	}
 	return s, nil
+}
+
+func xrayOnlineClients(ctx context.Context, r Runner, server string) (uint64, error) {
+	out, err := r.Run(ctx, "xray", "api", "statsonlineiplist", "-s", server, "-all")
+	if err != nil {
+		return 0, err
+	}
+	var resp struct {
+		Users []struct {
+			IPs []struct {
+				IP string `json:"ip"`
+			} `json:"ips"`
+		} `json:"users"`
+	}
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		return 0, err
+	}
+	var total uint64
+	for _, u := range resp.Users {
+		total += uint64(len(u.IPs))
+	}
+	return total, nil
 }
 
 func ensureHTTP(endpoint string) string {

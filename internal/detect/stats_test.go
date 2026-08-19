@@ -90,13 +90,14 @@ func TestSingBoxStats(t *testing.T) {
 
 func TestXrayStats(t *testing.T) {
 	r := fakeRunner{out: map[string]string{
-		"xray api stats query -s 127.0.0.1:8080": "user>>>u1>>>traffic>>>uplink 700\nuser>>>u1>>>traffic>>>downlink 300\n",
+		"xray api stats query -s 127.0.0.1:8080":                    "user>>>u1>>>traffic>>>uplink 700\nuser>>>u1>>>traffic>>>downlink 300\n",
+		"xray api statsonlineiplist -s 127.0.0.1:8080 -all": `{"users":[{"email":"u1","ips":[{"ip":"1.2.3.4","last_seen":1},{"ip":"5.6.7.8","last_seen":2}]},{"email":"u2","ips":[{"ip":"9.10.11.12","last_seen":3}]}]}`,
 	}}
 	s, err := xrayStats(context.Background(), r, "127.0.0.1:8080")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.Tx != 700 || s.Rx != 300 {
+	if s.Tx != 700 || s.Rx != 300 || s.OnlineClients != 3 {
 		t.Fatalf("stats = %+v", s)
 	}
 }
