@@ -42,6 +42,33 @@ func TestHysteria2Stats(t *testing.T) {
 	}
 }
 
+func TestHysteria2StatsNoScheme(t *testing.T) {
+	old := http.DefaultTransport
+	defer func() { http.DefaultTransport = old }()
+	var gotURL string
+	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		gotURL = req.URL.String()
+		body := ""
+		switch req.URL.Path {
+		case "/traffic":
+			body = `{"u1":{"tx":1,"rx":2}}`
+		case "/online":
+			body = `{}`
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(body)),
+		}, nil
+	})
+	if _, err := CollectStats(context.Background(), "hysteria2", "127.0.0.1:8080", ""); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(gotURL, "http://127.0.0.1:8080/") {
+		t.Fatalf("url = %q", gotURL)
+	}
+}
+
 func TestSingBoxStats(t *testing.T) {
 	old := http.DefaultTransport
 	defer func() { http.DefaultTransport = old }()

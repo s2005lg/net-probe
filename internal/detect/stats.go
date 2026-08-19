@@ -47,6 +47,7 @@ func CollectStatsWithRunner(ctx context.Context, kind string, endpoint, secret s
 }
 
 func hysteria2Stats(ctx context.Context, endpoint, secret string) (*report.Stats, error) {
+	endpoint = ensureHTTP(endpoint)
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	client := &http.Client{Timeout: 5 * time.Second}
@@ -73,14 +74,19 @@ func hysteria2Stats(ctx context.Context, endpoint, secret string) (*report.Stats
 }
 
 func singBoxStats(ctx context.Context, endpoint, secret string) (*report.Stats, error) {
+	endpoint = ensureHTTP(endpoint)
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	client := &http.Client{Timeout: 5 * time.Second}
+	authHeader := ""
+	if secret != "" {
+		authHeader = "Bearer " + secret
+	}
 	v := struct {
 		Up   uint64 `json:"up"`
 		Down uint64 `json:"down"`
 	}{}
-	if err := getJSON(ctx, client, endpoint+"/traffic", secret, &v); err != nil {
+	if err := getJSON(ctx, client, endpoint+"/traffic", authHeader, &v); err != nil {
 		return nil, err
 	}
 	return &report.Stats{Tx: v.Up, Rx: v.Down}, nil
@@ -106,6 +112,13 @@ func xrayStats(ctx context.Context, r Runner, server string) (*report.Stats, err
 		}
 	}
 	return s, nil
+}
+
+func ensureHTTP(endpoint string) string {
+	if strings.Contains(endpoint, "://") {
+		return endpoint
+	}
+	return "http://" + endpoint
 }
 
 func discoverStats(tmpl Template) (StatsEndpoint, bool) {
@@ -148,13 +161,13 @@ func discoverStats(tmpl Template) (StatsEndpoint, bool) {
 	return StatsEndpoint{}, false
 }
 
-func getJSON(ctx context.Context, client *http.Client, url, secret string, out any) error {
+func getJSON(ctx context.Context, client *http.Client, url, authHeader string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
-	if secret != "" {
-		req.Header.Set("Authorization", "Bearer "+secret)
+	if authHeader != "" {
+		req.Header.Set("Authorization", authHeader)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
