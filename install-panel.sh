@@ -29,6 +29,7 @@ fi
 
 install -d -m 0755 /etc/net-probe-panel
 install -d -m 0755 /var/lib/net-probe-panel
+chown net-probe-panel:net-probe-panel /var/lib/net-probe-panel
 
 agent_token="${NET_PROBE_PANEL_AGENT_TOKEN:-$(openssl rand -hex 24)}"
 admin_password="${NET_PROBE_PANEL_ADMIN_PASSWORD:-$(openssl rand -hex 24)}"
@@ -50,6 +51,7 @@ hourly_days = 30
 daily_days = 365
 EOF
 chmod 600 /etc/net-probe-panel/config.toml
+chown net-probe-panel:net-probe-panel /etc/net-probe-panel/config.toml
 
 printf 'NET_PROBE_PANEL_ADMIN_PASSWORD=%s\n' "${admin_password}" > /etc/net-probe-panel/panel.env
 chmod 600 /etc/net-probe-panel/panel.env

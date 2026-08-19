@@ -41,10 +41,12 @@ if [ -n "${NET_PROBE_PANEL_URL:-}" ]; then
       install -d -m 0755 /etc/net-probe
       printf '%s\n' "${NET_PROBE_PANEL_TOKEN}" > /etc/net-probe/panel-token
       chmod 600 /etc/net-probe/panel-token
+      chown net-probe:net-probe /etc/net-probe/panel-token
       echo 'token_file = "/etc/net-probe/panel-token"'
     fi
   } > /etc/net-probe/config.toml
   chmod 600 /etc/net-probe/config.toml
+  chown net-probe:net-probe /etc/net-probe/config.toml
 else
   cat > /etc/net-probe/config.toml <<'EOF'
 [[sink]]
@@ -52,6 +54,7 @@ type = "webhook"
 url = "https://example.com/net-probe-report"
 EOF
   chmod 600 /etc/net-probe/config.toml
+  chown net-probe:net-probe /etc/net-probe/config.toml
 fi
 
 cat > /etc/systemd/system/net-probe.service <<'EOF'
