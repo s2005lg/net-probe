@@ -45,6 +45,7 @@ export default function NodeDetailPage() {
     metrics.length > 0
       ? `${formatDate(metrics[0].ts)} ~ ${formatDate(metrics[metrics.length - 1].ts)}`
       : "";
+  const memUsed = host.mem_total_bytes - host.mem_available_bytes;
 
   return (
     <div className="space-y-5">
@@ -91,6 +92,24 @@ export default function NodeDetailPage() {
             ))}
           </div>
         )}
+      </section>
+
+      <section className="rounded border border-edge bg-panel p-4">
+        <h2 className="mb-3 font-head text-fg">容量</h2>
+        <div className="grid gap-3 md:grid-cols-2">
+          <CapacityBar
+            label="内存"
+            usedBytes={memUsed}
+            totalBytes={host.mem_total_bytes}
+            usedPct={host.mem_used_pct}
+          />
+          <CapacityBar
+            label="磁盘"
+            usedBytes={host.disk_used_bytes ?? 0}
+            totalBytes={host.disk_total_bytes ?? 0}
+            usedPct={host.disk_used_pct}
+          />
+        </div>
       </section>
 
       <section className="rounded border border-edge bg-panel p-4">
@@ -167,6 +186,44 @@ function Row({ label, value }: { label: string; value: string }) {
     <div className="flex justify-between">
       <dt>{label}</dt>
       <dd className="text-fg">{value}</dd>
+    </div>
+  );
+}
+
+function CapacityBar({
+  label,
+  usedBytes,
+  totalBytes,
+  usedPct,
+}: {
+  label: string;
+  usedBytes: number;
+  totalBytes: number;
+  usedPct: number;
+}) {
+  const pct = Math.max(0, Math.min(100, Number.isFinite(usedPct) ? usedPct : 0));
+  const color =
+    pct >= 85 ? "var(--color-danger)" : pct >= 70 ? "var(--color-warn)" : "var(--color-ok)";
+  const text =
+    totalBytes > 0
+      ? `已用 ${formatBytes(usedBytes)} / ${formatBytes(totalBytes)} · ${pct.toFixed(1)}%`
+      : "—";
+
+  return (
+    <div className="rounded border border-edge bg-surface p-3">
+      <div className="flex items-center justify-between text-sm">
+        <span className="text-fg">{label}</span>
+        <span className="text-muted">{text}</span>
+      </div>
+      <div
+        className="mt-2 h-2 w-full overflow-hidden rounded-full"
+        style={{ background: "var(--color-edge)" }}
+      >
+        <div
+          className="h-full rounded-full"
+          style={{ width: `${pct}%`, background: color }}
+        />
+      </div>
     </div>
   );
 }
