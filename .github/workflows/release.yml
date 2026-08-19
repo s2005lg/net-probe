@@ -16,13 +16,24 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23"
-      - name: Build linux amd64
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Build frontend
+        run: cd web && npm ci && npm run build
+      - name: Build agent linux amd64
         run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o net-probe_linux_amd64 ./cmd/net-probe
-      - name: Build linux arm64
+      - name: Build agent linux arm64
         run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o net-probe_linux_arm64 ./cmd/net-probe
+      - name: Build panel linux amd64
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o net-probe-panel_linux_amd64 ./cmd/net-probe-panel
+      - name: Build panel linux arm64
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o net-probe-panel_linux_arm64 ./cmd/net-probe-panel
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             net-probe_linux_amd64
             net-probe_linux_arm64
+            net-probe-panel_linux_amd64
+            net-probe-panel_linux_arm64
