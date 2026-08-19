@@ -26,7 +26,7 @@ func Detect(ctx context.Context, reg *Registry, cfg config.DetectConfig, statsCf
 	if err != nil {
 		return nil, err
 	}
-	var out []report.Service
+	out := make([]report.Service, 0)
 	matched := map[string]bool{}
 	for _, name := range names {
 		unit := strings.TrimSuffix(name, ".service")
