@@ -15,6 +15,35 @@ panel or webhook sink.
 - Sends reports over HTTPS to `panel` or `webhook` sinks with optional bearer
   token authentication.
 
+## Recommended installation order
+
+The panel and agents share a single agent token: the panel requires it to
+accept reports, and every agent must present the same value when it uploads.
+Install the panel first, then the agents.
+
+1. Install the panel and note the `agent token` it prints (or pin your own):
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install-panel.sh | sudo bash
+   # output includes: agent token: <token>
+   ```
+
+2. Install the agent on each node with the panel URL and the same token:
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install.sh | \
+     sudo NET_PROBE_PANEL_URL="https://<panel-ip>:<port>" \
+          NET_PROBE_PANEL_TOKEN="<same-token>" bash
+   ```
+
+If you omit the token:
+
+- Panel: the installer generates a random token and prints it — copy that value
+  to every agent.
+- Agent: the installer configures the panel sink without a token, so the panel
+  rejects reports with `401 Unauthorized`. Always pass `NET_PROBE_PANEL_TOKEN`
+  matching the panel's token.
+
 ## One-line install
 
 Install the latest release directly from GitHub:
@@ -229,6 +258,28 @@ sudo systemctl restart net-probe.timer
 - 采集主机名、操作系统 / 内核信息、负载、内存、磁盘使用率、运行时间以及可升级软件包数量。
 - 报告已识别服务的监听端口和证书到期时间。
 - 通过 HTTPS 向 `panel` 或 `webhook` 上报，支持可选的 Bearer Token 认证。
+
+### 推荐安装顺序
+
+Panel 和 Agent 共享同一个 Agent Token：Panel 用它校验上报，每个 Agent 上报时都必须携带同一个值。建议先安装 Panel，再安装 Agent。
+
+1. 先安装 Panel，并记录它最后打印的 `agent token`（也可以自己指定）：
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install-panel.sh | sudo bash
+   # 输出中会包含：agent token: <token>
+   ```
+
+2. 再在每个节点安装 Agent，传入 Panel 地址和同一个 Token：
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install.sh |   sudo NET_PROBE_PANEL_URL="https://<panel-ip>:<port>"        NET_PROBE_PANEL_TOKEN="<同一个token>" bash
+   ```
+
+如果省略 Token：
+
+- Panel 侧：安装脚本会随机生成一个 Token 并打印，需要把这个值复制给所有 Agent。
+- Agent 侧：安装脚本会生成不带 Token 的 panel sink，Panel 会以 `401 Unauthorized` 拒绝上报。因此 Agent 侧务必传入与 Panel 一致的 `NET_PROBE_PANEL_TOKEN`。
 
 ### 一键安装
 
