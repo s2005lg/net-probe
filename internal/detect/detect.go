@@ -25,12 +25,14 @@ func Detect(ctx context.Context, reg *Registry, cfg config.DetectConfig, statsCf
 		return nil, err
 	}
 	var out []report.Service
+	matched := map[string]bool{}
 	for _, name := range names {
 		unit := strings.TrimSuffix(name, ".service")
 		tmpl, ok := reg.FindUnit(unit)
 		if !ok {
 			continue
 		}
+		matched[unit] = true
 		info, err := ShowUnit(ctx, deps.Runner, unit)
 		if err != nil {
 			out = append(out, report.Service{Type: tmpl.ID, Runtime: "systemd", Unit: unit, Status: "error", Error: err.Error()})
@@ -55,6 +57,9 @@ func Detect(ctx context.Context, reg *Registry, cfg config.DetectConfig, statsCf
 		socks := readProcSockets(procRoot)
 		if info.MainPID > 0 {
 			svc.Listen = ListenForPID(procRoot, info.MainPID, socks)
+			if len(svc.Listen) == 0 && deps.Runner != nil {
+				svc.Listen = ListenForPIDFromSS(ctx, deps.Runner, info.MainPID)
+			}
 		}
 		svc.ListenOK = len(svc.Listen) > 0
 		if len(tmpl.ListenPorts) > 0 {
@@ -79,7 +84,50 @@ func Detect(ctx context.Context, reg *Registry, cfg config.DetectConfig, statsCf
 		}
 		out = append(out, svc)
 	}
+	if containsString(cfg.Include, "generic") {
+		for _, name := range names {
+			unit := strings.TrimSuffix(name, ".service")
+			if matched[unit] {
+				continue
+			}
+			info, err := ShowUnit(ctx, deps.Runner, unit)
+			if err != nil || !info.Active || info.MainPID <= 0 {
+				continue
+			}
+			listen := ListenForPID(procRoot, info.MainPID, readProcSockets(procRoot))
+			if len(listen) == 0 && deps.Runner != nil {
+				listen = ListenForPIDFromSS(ctx, deps.Runner, info.MainPID)
+			}
+			if len(listen) == 0 {
+				continue
+			}
+			svc := report.Service{
+				Type:      "generic",
+				Runtime:   "systemd",
+				Unit:      unit,
+				Binary:    info.ExecStart,
+				Active:    info.Active,
+				Enabled:   info.Enabled,
+				MainPID:   info.MainPID,
+				NRestarts: info.NRestarts,
+				Listen:    listen,
+				ListenOK:  true,
+				Status:    "ok",
+			}
+			out = append(out, svc)
+		}
+	}
+
 	return out, nil
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func statsEndpointFor(tmpl Template, statsCfg config.StatsConfig) (string, string, bool) {

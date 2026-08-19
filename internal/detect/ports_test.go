@@ -1,6 +1,7 @@
 package detect
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -63,5 +64,28 @@ func TestHexIP(t *testing.T) {
 	}
 	if got := hexIP("00000000000000000000000000000000"); got != "::" {
 		t.Fatalf("ipv6 wildcard = %q", got)
+	}
+}
+
+func TestSplitSSAddrPort(t *testing.T) {
+	addr, port := splitSSAddrPort("[::]:443")
+	if addr != "::" || port != 443 {
+		t.Fatalf("ipv6 = %q:%d", addr, port)
+	}
+	addr, port = splitSSAddrPort("*:28418")
+	if addr != "0.0.0.0" || port != 28418 {
+		t.Fatalf("wildcard = %q:%d", addr, port)
+	}
+}
+
+func TestListenForPIDFromSS(t *testing.T) {
+	line := "State Recv-Q Send-Q Local Address:Port Peer Address:Port Process\nLISTEN 0 4096 *:28418 *:* users:((\"net-probe-panel\",pid=42,fd=8))\n"
+	r := fakeRunner{out: map[string]string{
+		"ss -lntp": line,
+		"ss -lnup": "",
+	}}
+	got := ListenForPIDFromSS(context.Background(), r, 42)
+	if len(got) != 1 || got[0].Proto != "tcp" || got[0].Port != 28418 {
+		t.Fatalf("got=%+v", got)
 	}
 }

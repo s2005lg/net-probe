@@ -22,10 +22,11 @@ type httpSink struct {
 	cfg    config.Sink
 	token  string
 	method string
+	nodeID string
 	client *http.Client
 }
 
-func New(cfg config.Sink) (Sink, error) {
+func New(cfg config.Sink, nodeID string) (Sink, error) {
 	token, err := config.ResolveToken(cfg)
 	if err != nil {
 		return nil, err
@@ -50,7 +51,7 @@ func New(cfg config.Sink) (Sink, error) {
 		}
 		client.Transport = &http.Transport{TLSClientConfig: tlsCfg}
 	}
-	return &httpSink{cfg: cfg, token: token, method: method, client: client}, nil
+	return &httpSink{cfg: cfg, token: token, method: method, nodeID: nodeID, client: client}, nil
 }
 
 func (s *httpSink) Send(ctx context.Context, body []byte) error {
@@ -63,6 +64,9 @@ func (s *httpSink) Send(ctx context.Context, body []byte) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if s.nodeID != "" {
+		req.Header.Set("X-Agent-Id", s.nodeID)
+	}
 	if s.token != "" {
 		req.Header.Set("Authorization", "Bearer "+s.token)
 	}

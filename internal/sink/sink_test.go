@@ -18,10 +18,12 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 
 func TestPanelSink(t *testing.T) {
 	var gotAuth string
+	var gotAgent string
 	var gotPath string
 	t.Setenv("T", "secret")
 	rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		gotAuth = req.Header.Get("Authorization")
+		gotAgent = req.Header.Get("X-Agent-Id")
 		gotPath = req.URL.Path
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -29,7 +31,7 @@ func TestPanelSink(t *testing.T) {
 			Body:       io.NopCloser(strings.NewReader("")),
 		}, nil
 	})
-	s, err := New(config.Sink{Type: "panel", URL: "http://panel.example.com", TokenEnv: "T"})
+	s, err := New(config.Sink{Type: "panel", URL: "http://panel.example.com", TokenEnv: "T"}, "node-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,6 +45,9 @@ func TestPanelSink(t *testing.T) {
 	}
 	if gotAuth != "Bearer secret" {
 		t.Fatalf("auth = %q", gotAuth)
+	}
+	if gotAgent != "node-1" {
+		t.Fatalf("agent id = %q", gotAgent)
 	}
 	if gotPath != "/api/v1/agents/report" {
 		t.Fatalf("panel path = %q", gotPath)
@@ -59,7 +64,7 @@ func TestWebhookSinkKeepsURL(t *testing.T) {
 			Body:       io.NopCloser(strings.NewReader("")),
 		}, nil
 	})
-	s, err := New(config.Sink{Type: "webhook", URL: "https://example.com/api/push/abc"})
+	s, err := New(config.Sink{Type: "webhook", URL: "https://example.com/api/push/abc"}, "node-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +80,7 @@ func TestWebhookSinkKeepsURL(t *testing.T) {
 
 func TestSinkTLSConfig(t *testing.T) {
 	t.Setenv("T", "s")
-	s, err := New(config.Sink{Type: "webhook", URL: "https://example.com", TokenEnv: "T", TLSSkipVerify: true})
+	s, err := New(config.Sink{Type: "webhook", URL: "https://example.com", TokenEnv: "T", TLSSkipVerify: true}, "node-1")
 	if err != nil {
 		t.Fatal(err)
 	}

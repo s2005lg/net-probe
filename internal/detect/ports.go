@@ -1,6 +1,7 @@
 package detect
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -124,4 +125,60 @@ func pidInodes(procRoot string, pid int) map[uint64]bool {
 		}
 	}
 	return out
+}
+
+func ListenForPIDFromSS(ctx context.Context, r Runner, pid int) []report.Listen {
+	if r == nil {
+		return nil
+	}
+	want := "pid=" + strconv.Itoa(pid)
+	var result []report.Listen
+	for _, spec := range []struct {
+		proto string
+		args  []string
+	}{
+		{proto: "tcp", args: []string{"-lntp"}},
+		{proto: "udp", args: []string{"-lnup"}},
+	} {
+		out, err := r.Run(ctx, "ss", spec.args...)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(out, "\n") {
+			if !strings.Contains(line, want) {
+				continue
+			}
+			fields := strings.Fields(line)
+			if len(fields) < 4 {
+				continue
+			}
+			addr, port := splitSSAddrPort(fields[3])
+			if port == 0 {
+				continue
+			}
+			result = append(result, report.Listen{Proto: spec.proto, Addr: addr, Port: port})
+		}
+	}
+	return result
+}
+
+func splitSSAddrPort(local string) (string, uint16) {
+	if strings.HasPrefix(local, "[") {
+		if close := strings.Index(local, "]"); close > 0 {
+			local = local[1:close] + local[close+1:]
+		}
+	}
+	idx := strings.LastIndex(local, ":")
+	if idx < 0 {
+		return "", 0
+	}
+	addr := local[:idx]
+	port, err := strconv.ParseUint(local[idx+1:], 10, 16)
+	if err != nil {
+		return "", 0
+	}
+	if addr == "*" {
+		addr = "0.0.0.0"
+	}
+	return addr, uint16(port)
 }

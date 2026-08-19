@@ -17,8 +17,10 @@ var version = "dev"
 func main() {
 	cfgPath := flag.String("config", "", "config file path")
 	check := flag.Bool("check", false, "validate config and print report preview")
+	once := flag.Bool("once", false, "run once and exit (default behavior)")
 	ver := flag.Bool("version", false, "print version")
 	flag.Parse()
+	_ = once
 
 	if *ver {
 		fmt.Println(version)

@@ -88,7 +88,7 @@ func Run(ctx context.Context, cfg *config.Config, version string, runner detect.
 	}
 	rc := 0
 	for _, sc := range cfg.Sinks {
-		s, err := sink.New(sc)
+		s, err := sink.New(sc, rep.NodeID)
 		if err != nil {
 			rc = 1
 			continue
