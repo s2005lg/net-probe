@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import {
   CartesianGrid,
+  Legend,
   Line,
   LineChart,
   ResponsiveContainer,
@@ -86,33 +87,52 @@ export default function NodeDetailPage() {
         {metrics.length === 0 ? (
           <p className="text-muted">暂无历史数据</p>
         ) : (
-          <ResponsiveContainer width="100%" height={260}>
-            <LineChart data={metrics}>
-              <CartesianGrid stroke="var(--color-edge)" strokeDasharray="3 3" />
-              <XAxis
-                dataKey="ts"
-                tickFormatter={(v) => formatTime(Number(v))}
-                stroke="var(--color-muted)"
-              />
-              <YAxis stroke="var(--color-muted)" />
-              <Tooltip labelFormatter={(v) => formatTime(Number(v))} />
-              <Line type="monotone" dataKey="load1" name="load1" stroke="var(--color-ok)" dot={false} />
-              <Line
-                type="monotone"
-                dataKey="mem_used_pct"
-                name="内存%"
-                stroke="var(--color-warn)"
-                dot={false}
-              />
-              <Line
-                type="monotone"
-                dataKey="disk_used_pct"
-                name="磁盘%"
-                stroke="var(--color-danger)"
-                dot={false}
-              />
-            </LineChart>
-          </ResponsiveContainer>
+          <div className="space-y-6">
+            <div>
+              <h3 className="mb-2 text-sm text-muted">负载</h3>
+              <ResponsiveContainer width="100%" height={220}>
+                <LineChart data={metrics}>
+                  <CartesianGrid stroke="var(--color-edge)" strokeDasharray="3 3" />
+                  <XAxis
+                    dataKey="ts"
+                    tickFormatter={(v) => formatTime(Number(v))}
+                    stroke="var(--color-muted)"
+                  />
+                  <YAxis stroke="var(--color-muted)" domain={[0, "auto"]} />
+                  <Tooltip labelFormatter={(v) => formatTime(Number(v))} />
+                  <Legend />
+                  <Line type="monotone" dataKey="load1" name="1分钟负载" stroke="var(--color-ok)" dot={false} />
+                  <Line type="monotone" dataKey="load5" name="5分钟负载" stroke="var(--color-warn)" dot={false} />
+                  <Line type="monotone" dataKey="load15" name="15分钟负载" stroke="var(--color-danger)" dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+            <div>
+              <h3 className="mb-2 text-sm text-muted">内存 / 磁盘</h3>
+              <ResponsiveContainer width="100%" height={220}>
+                <LineChart data={metrics}>
+                  <CartesianGrid stroke="var(--color-edge)" strokeDasharray="3 3" />
+                  <XAxis
+                    dataKey="ts"
+                    tickFormatter={(v) => formatTime(Number(v))}
+                    stroke="var(--color-muted)"
+                  />
+                  <YAxis
+                    stroke="var(--color-muted)"
+                    domain={[0, 100]}
+                    tickFormatter={(v) => `${v}%`}
+                  />
+                  <Tooltip
+                    labelFormatter={(v) => formatTime(Number(v))}
+                    formatter={(value, name) => [`${Number(value).toFixed(1)}%`, name]}
+                  />
+                  <Legend />
+                  <Line type="monotone" dataKey="mem_used_pct" name="内存使用率" stroke="var(--color-warn)" dot={false} />
+                  <Line type="monotone" dataKey="disk_used_pct" name="磁盘使用率" stroke="var(--color-danger)" dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
         )}
       </section>
     </div>
