@@ -25,12 +25,18 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/admin/login", s.handleLogin)
 	mux.Handle("POST /api/v1/admin/logout", s.requireAdmin(s.handleLogout))
 
+	mux.Handle("GET /api/v1/admin/overview", s.requireAdmin(s.handleOverview))
 	mux.Handle("GET /api/v1/admin/nodes", s.requireAdmin(s.handleNodes))
 	mux.Handle("GET /api/v1/admin/nodes/{id}", s.requireAdmin(s.handleNodeDetail))
 	mux.Handle("PATCH /api/v1/admin/nodes/{id}", s.requireAdmin(s.handleNodePatch))
 	mux.Handle("DELETE /api/v1/admin/nodes/{id}", s.requireAdmin(s.handleNodeDelete))
 	mux.Handle("GET /api/v1/admin/nodes/{id}/metrics", s.requireAdmin(s.handleNodeMetrics))
+	mux.Handle("GET /api/v1/admin/alerts", s.requireAdmin(s.handleAlerts))
+	mux.Handle("POST /api/v1/admin/alerts/{id}/ack", s.requireAdmin(s.handleAlertAck))
 	mux.Handle("GET /api/v1/admin/versions", s.requireAdmin(s.handleVersions))
+	mux.Handle("PATCH /api/v1/admin/versions/{service_type}", s.requireAdmin(s.handleVersionPatch))
+	mux.Handle("GET /api/v1/admin/settings", s.requireAdmin(s.handleSettings))
+	mux.Handle("/", s.staticHandler())
 	return mux
 }
 

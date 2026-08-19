@@ -1,0 +1,30 @@
+@import "tailwindcss";
+
+@theme {
+  --color-surface: #020617;
+  --color-panel: #1e293b;
+  --color-edge: #334155;
+  --color-fg: #f8fafc;
+  --color-muted: #94a3b8;
+  --color-ok: #22c55e;
+  --color-warn: #eab308;
+  --color-danger: #ef4444;
+  --font-head: "Fira Code", monospace;
+  --font-body: "Fira Sans", sans-serif;
+}
+
+body {
+  margin: 0;
+  background: var(--color-surface);
+  color: var(--color-fg);
+  font-family: var(--font-body);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
