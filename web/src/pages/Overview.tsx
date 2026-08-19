@@ -298,8 +298,8 @@ export default function OverviewPage() {
                   <th className="px-3 py-2">服务类型</th>
                   <th className="px-3 py-2">版本</th>
                   <th className="px-3 py-2">状态</th>
-                  <th className="px-3 py-2">Tx</th>
-                  <th className="px-3 py-2">Rx</th>
+                  <th className="px-3 py-2">上行</th>
+                  <th className="px-3 py-2">下行</th>
                   <th className="px-3 py-2">在线连接</th>
                 </tr>
               </thead>
