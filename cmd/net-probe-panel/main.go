@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -18,9 +19,16 @@ import (
 	panelversion "github.com/s2005lg/net-probe/internal/panel/version"
 )
 
+var version = "dev"
+
 func main() {
 	cfgPath := flag.String("config", "/etc/net-probe-panel/config.toml", "config file path")
+	ver := flag.Bool("version", false, "print version")
 	flag.Parse()
+	if *ver {
+		fmt.Println(version)
+		return
+	}
 
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
