@@ -17,12 +17,21 @@ type Config struct {
 		HourlyDays int `toml:"hourly_days"`
 		DailyDays  int `toml:"daily_days"`
 	} `toml:"retention"`
+	Alert struct {
+		CertExpiryDays int    `toml:"cert_expiry_days"`
+		DiskUsagePct   int    `toml:"disk_usage_pct"`
+		MemUsagePct    int    `toml:"mem_usage_pct"`
+		TelegramToken  string `toml:"telegram_token"`
+		TelegramChatID string `toml:"telegram_chat_id"`
+		WebhookURL     string `toml:"webhook_url"`
+	} `toml:"alert"`
 }
 
 func Default() *Config {
 	c := &Config{ListenAddr: ":8443", DataDir: "/var/lib/net-probe-panel", NodeTimeout: "3m"}
 	c.Admin.User = "admin"
 	c.Retention.RawDays, c.Retention.HourlyDays, c.Retention.DailyDays = 7, 30, 365
+	c.Alert.CertExpiryDays, c.Alert.DiskUsagePct, c.Alert.MemUsagePct = 7, 85, 90
 	return c
 }
 
