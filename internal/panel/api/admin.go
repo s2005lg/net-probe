@@ -3,8 +3,6 @@ package api
 import (
 	"database/sql"
 	"encoding/json"
-	"io"
-	"net"
 	"net/http"
 	"os"
 	"sort"
@@ -18,15 +16,19 @@ import (
 )
 
 type nodeRow struct {
-	NodeID       string          `json:"node_id"`
-	Alias        string          `json:"alias"`
-	Tags         []string        `json:"tags"`
-	MutedUntil   int64           `json:"muted_until"`
-	LastReportAt int64           `json:"last_report_at"`
-	Host         json.RawMessage `json:"host"`
-	Services     json.RawMessage `json:"services"`
-	Status       string          `json:"status"`
-	IPLocation   string          `json:"ip_location"`
+	NodeID         string          `json:"node_id"`
+	Alias          string          `json:"alias"`
+	Tags           []string        `json:"tags"`
+	MutedUntil     int64           `json:"muted_until"`
+	LastReportAt   int64           `json:"last_report_at"`
+	Host           json.RawMessage `json:"host"`
+	Services       json.RawMessage `json:"services"`
+	Status         string          `json:"status"`
+	IPLocation     string          `json:"ip_location"`
+	IPCountry      string          `json:"ip_country"`
+	IPRegion       string          `json:"ip_region"`
+	IPCity         string          `json:"ip_city"`
+	IPGeoUpdatedAt int64           `json:"ip_geo_updated_at"`
 }
 
 type nodeListResponse struct {
@@ -36,7 +38,7 @@ type nodeListResponse struct {
 	PageSize int       `json:"page_size"`
 }
 
-const nodeSelect = `SELECT node_id, COALESCE(alias,''), COALESCE(muted_until,0), COALESCE(last_report_at,0), COALESCE(last_host_json,'{}'), COALESCE(last_services_json,'[]') FROM nodes`
+const nodeSelect = `SELECT node_id, COALESCE(alias,''), COALESCE(muted_until,0), COALESCE(last_report_at,0), COALESCE(last_host_json,'{}'), COALESCE(last_services_json,'[]'), COALESCE(ip_location,''), COALESCE(ip_country,''), COALESCE(ip_region,''), COALESCE(ip_city,''), COALESCE(ip_geo_updated_at,0) FROM nodes`
 
 type metricRow struct {
 	TS          int64           `json:"ts"`
@@ -52,7 +54,7 @@ type metricRow struct {
 func scanNode(scanner interface{ Scan(...any) error }) (nodeRow, error) {
 	var n nodeRow
 	var host, services string
-	err := scanner.Scan(&n.NodeID, &n.Alias, &n.MutedUntil, &n.LastReportAt, &host, &services)
+	err := scanner.Scan(&n.NodeID, &n.Alias, &n.MutedUntil, &n.LastReportAt, &host, &services, &n.IPLocation, &n.IPCountry, &n.IPRegion, &n.IPCity, &n.IPGeoUpdatedAt)
 	n.Host = json.RawMessage(host)
 	n.Services = json.RawMessage(services)
 	return n, err
@@ -114,7 +116,6 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
 			return
 		}
-		n.IPLocation = s.ipLocationForHost(n.Host)
 		out = append(out, n)
 	}
 	if err := rows.Err(); err != nil {
@@ -198,7 +199,6 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
 		return
 	}
-	n.IPLocation = s.ipLocationForHost(n.Host)
 	writeJSON(w, http.StatusOK, n)
 }
 
@@ -262,7 +262,6 @@ func (s *Server) handleNodePatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
 		return
 	}
-	n.IPLocation = s.ipLocationForHost(n.Host)
 	writeJSON(w, http.StatusOK, n)
 }
 
@@ -443,74 +442,6 @@ func (s *Server) handleTagDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": true})
-}
-
-type ipGeoResponse struct {
-	Status     string `json:"status"`
-	Country    string `json:"country"`
-	RegionName string `json:"regionName"`
-	City       string `json:"city"`
-}
-
-func (s *Server) ipLocationForHost(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return ""
-	}
-	var host report.Host
-	_ = json.Unmarshal(raw, &host)
-	ip := host.IPv4
-	if ip == "" {
-		ip = host.IPv6
-	}
-	if ip == "" {
-		return ""
-	}
-	if parsed := net.ParseIP(ip); parsed != nil && parsed.IsPrivate() {
-		return "内网"
-	}
-	return s.ipLocation(ip)
-}
-
-func (s *Server) ipLocation(ip string) string {
-	s.geoMu.Lock()
-	if cached, ok := s.geoCache[ip]; ok {
-		s.geoMu.Unlock()
-		return cached
-	}
-	s.geoMu.Unlock()
-
-	client := &http.Client{Timeout: 4 * time.Second}
-	resp, err := client.Get("http://ip-api.com/json/" + ip + "?lang=zh-CN&fields=status,country,regionName,city")
-	if err != nil {
-		return ""
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return ""
-	}
-	var geo ipGeoResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&geo); err != nil || geo.Status != "success" {
-		return ""
-	}
-	location := formatIPLocation(geo.Country, geo.RegionName, geo.City)
-
-	s.geoMu.Lock()
-	s.geoCache[ip] = location
-	s.geoMu.Unlock()
-	return location
-}
-
-func formatIPLocation(country, regionName, city string) string {
-	parts := make([]string, 0, 2)
-	if country != "" {
-		parts = append(parts, country)
-	}
-	if city != "" {
-		parts = append(parts, city)
-	} else if regionName != "" {
-		parts = append(parts, regionName)
-	}
-	return strings.Join(parts, "-")
 }
 
 type versionRow struct {

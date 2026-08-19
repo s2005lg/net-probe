@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -15,8 +16,10 @@ import (
 	"github.com/s2005lg/net-probe/internal/panel/api"
 	"github.com/s2005lg/net-probe/internal/panel/config"
 	"github.com/s2005lg/net-probe/internal/panel/db"
+	"github.com/s2005lg/net-probe/internal/panel/geo"
 	"github.com/s2005lg/net-probe/internal/panel/retention"
 	panelversion "github.com/s2005lg/net-probe/internal/panel/version"
+	"github.com/s2005lg/net-probe/internal/report"
 )
 
 var version = "dev"
@@ -92,9 +95,64 @@ func startBackground(ctx context.Context, d *sql.DB, cfg *config.Config) {
 			log.Printf("alert evaluation: %v", err)
 		}
 	})
+	go runEvery(ctx, geoRefreshInterval(cfg), func(ctx context.Context) {
+		if err := refreshIPLocations(ctx, d); err != nil {
+			log.Printf("IP location refresh: %v", err)
+		}
+	})
 	go runEvery(ctx, 12*time.Hour, func(ctx context.Context) {
 		refreshVersions(ctx, d)
 	})
+}
+
+func geoRefreshInterval(cfg *config.Config) time.Duration {
+	if cfg.Geo.RefreshInterval == "" {
+		return 12 * time.Hour
+	}
+	if d, err := time.ParseDuration(cfg.Geo.RefreshInterval); err == nil && d > 0 {
+		return d
+	}
+	return 12 * time.Hour
+}
+
+func refreshIPLocations(ctx context.Context, d *sql.DB) error {
+	rows, err := d.QueryContext(ctx, `SELECT node_id, COALESCE(last_host_json,'{}') FROM nodes`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var nodeID, raw string
+		if err := rows.Scan(&nodeID, &raw); err != nil {
+			return err
+		}
+		var host report.Host
+		if err := json.Unmarshal([]byte(raw), &host); err != nil {
+			continue
+		}
+		ip := host.IPv4
+		if ip == "" {
+			ip = host.IPv6
+		}
+		if ip == "" {
+			continue
+		}
+		location, country, region, city := "内网", "", "", ""
+		if !geo.IsPrivateIP(ip) {
+			loc, err := geo.Lookup(ctx, ip)
+			if err != nil {
+				log.Printf("geo lookup %s: %v", ip, err)
+				continue
+			}
+			location, country, region, city = geo.Format(loc), loc.Country, loc.RegionName, loc.City
+		}
+		if _, err := d.ExecContext(ctx, `UPDATE nodes SET ip_location=?, ip_country=?, ip_region=?, ip_city=?, ip_geo_updated_at=? WHERE node_id=?`,
+			location, country, region, city, time.Now().Unix(), nodeID); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 func runEvery(ctx context.Context, interval time.Duration, fn func(context.Context)) {

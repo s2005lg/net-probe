@@ -25,6 +25,9 @@ type Config struct {
 		TelegramChatID string `toml:"telegram_chat_id"`
 		WebhookURL     string `toml:"webhook_url"`
 	} `toml:"alert"`
+	Geo struct {
+		RefreshInterval string `toml:"refresh_interval"`
+	} `toml:"geo"`
 }
 
 func Default() *Config {
@@ -32,6 +35,7 @@ func Default() *Config {
 	c.Admin.User = "admin"
 	c.Retention.RawDays, c.Retention.HourlyDays, c.Retention.DailyDays = 7, 30, 365
 	c.Alert.CertExpiryDays, c.Alert.DiskUsagePct, c.Alert.MemUsagePct = 7, 85, 90
+	c.Geo.RefreshInterval = "12h"
 	return c
 }
 
