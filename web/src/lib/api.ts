@@ -126,6 +126,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json" },
     ...init,
   });
+  if (res.status === 401 && !path.startsWith("/login")) {
+    window.location.replace("/login");
+    throw new Error("unauthorized");
+  }
   if (!res.ok) {
     let message = res.statusText;
     try {
