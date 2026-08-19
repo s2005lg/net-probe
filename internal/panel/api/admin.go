@@ -553,6 +553,7 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 type alertRow struct {
 	ID             int64  `json:"id"`
 	NodeID         string `json:"node_id"`
+	Alias          string `json:"alias"`
 	Hostname       string `json:"hostname"`
 	Rule           string `json:"rule"`
 	Status         string `json:"status"`
@@ -566,7 +567,7 @@ type alertRow struct {
 func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	q := `SELECT a.id, a.node_id, a.rule, a.status, a.message,
 		COALESCE(a.first_seen_at,0), COALESCE(a.last_seen_at,0), COALESCE(a.recovered_at,0), COALESCE(a.acknowledged_at,0),
-		COALESCE(n.last_host_json,'{}')
+		COALESCE(n.alias,''), COALESCE(n.last_host_json,'{}')
 		FROM alerts a LEFT JOIN nodes n ON n.node_id = a.node_id`
 	args := []any{}
 	conditions := []string{}
@@ -594,7 +595,7 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var a alertRow
 		var hostRaw string
-		if err := rows.Scan(&a.ID, &a.NodeID, &a.Rule, &a.Status, &a.Message, &a.FirstSeenAt, &a.LastSeenAt, &a.RecoveredAt, &a.AcknowledgedAt, &hostRaw); err != nil {
+		if err := rows.Scan(&a.ID, &a.NodeID, &a.Rule, &a.Status, &a.Message, &a.FirstSeenAt, &a.LastSeenAt, &a.RecoveredAt, &a.AcknowledgedAt, &a.Alias, &hostRaw); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
 			return
 		}

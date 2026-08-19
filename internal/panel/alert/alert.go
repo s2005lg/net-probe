@@ -57,10 +57,13 @@ func Evaluate(ctx context.Context, d *sql.DB, cfg *config.Config, now time.Time)
 			continue
 		}
 
-		hostname := hostnameFromJSON(node.HostJSON)
+		name := node.Alias
+		if name == "" {
+			name = hostnameFromJSON(node.HostJSON)
+		}
 
 		if node.LastReportAt == 0 || node.LastReportAt < cutoff {
-			triggered[alertKey{NodeID: node.NodeID, Rule: "node_offline"}] = nodeMessage(hostname, "节点离线")
+			triggered[alertKey{NodeID: node.NodeID, Rule: "node_offline"}] = nodeMessage(name, "节点离线")
 			continue
 		}
 
@@ -71,7 +74,7 @@ func Evaluate(ctx context.Context, d *sql.DB, cfg *config.Config, now time.Time)
 
 		for _, service := range services {
 			if !service.Active || service.Status == "error" {
-				triggered[alertKey{NodeID: node.NodeID, Rule: "service_down"}] = nodeMessage(hostname, "服务异常")
+				triggered[alertKey{NodeID: node.NodeID, Rule: "service_down"}] = nodeMessage(name, "服务异常")
 				break
 			}
 		}
@@ -82,16 +85,16 @@ func Evaluate(ctx context.Context, d *sql.DB, cfg *config.Config, now time.Time)
 				if service.Cert.DaysLeft >= 0 {
 					msg = fmt.Sprintf("证书剩余 %d 天", service.Cert.DaysLeft)
 				}
-				triggered[alertKey{NodeID: node.NodeID, Rule: "cert_expiry"}] = nodeMessage(hostname, msg)
+				triggered[alertKey{NodeID: node.NodeID, Rule: "cert_expiry"}] = nodeMessage(name, msg)
 				break
 			}
 		}
 
 		if host.DiskUsedPct > float64(cfg.Alert.DiskUsagePct) {
-			triggered[alertKey{NodeID: node.NodeID, Rule: "disk_usage"}] = nodeMessage(hostname, fmt.Sprintf("磁盘使用率 %.1f%%", host.DiskUsedPct))
+			triggered[alertKey{NodeID: node.NodeID, Rule: "disk_usage"}] = nodeMessage(name, fmt.Sprintf("磁盘使用率 %.1f%%", host.DiskUsedPct))
 		}
 		if host.MemUsedPct > float64(cfg.Alert.MemUsagePct) {
-			triggered[alertKey{NodeID: node.NodeID, Rule: "mem_usage"}] = nodeMessage(hostname, fmt.Sprintf("内存使用率 %.1f%%", host.MemUsedPct))
+			triggered[alertKey{NodeID: node.NodeID, Rule: "mem_usage"}] = nodeMessage(name, fmt.Sprintf("内存使用率 %.1f%%", host.MemUsedPct))
 		}
 
 		for _, service := range services {
@@ -100,7 +103,7 @@ func Evaluate(ctx context.Context, d *sql.DB, cfg *config.Config, now time.Time)
 				continue
 			}
 			if versionLess(service.Version, want) {
-				triggered[alertKey{NodeID: node.NodeID, Rule: "version_lag"}] = nodeMessage(hostname, fmt.Sprintf("服务 %s 版本落后：%s < %s", service.Type, service.Version, want))
+				triggered[alertKey{NodeID: node.NodeID, Rule: "version_lag"}] = nodeMessage(name, fmt.Sprintf("服务 %s 版本落后：%s < %s", service.Type, service.Version, want))
 				break
 			}
 		}
@@ -159,6 +162,7 @@ func Evaluate(ctx context.Context, d *sql.DB, cfg *config.Config, now time.Time)
 
 type nodeState struct {
 	NodeID       string
+	Alias        string
 	LastReportAt int64
 	MutedUntil   int64
 	HostJSON     string
@@ -166,7 +170,7 @@ type nodeState struct {
 }
 
 func loadNodes(ctx context.Context, d *sql.DB) ([]nodeState, error) {
-	rows, err := d.QueryContext(ctx, `SELECT node_id, COALESCE(last_report_at,0), COALESCE(muted_until,0), COALESCE(last_host_json,'{}'), COALESCE(last_services_json,'[]') FROM nodes`)
+	rows, err := d.QueryContext(ctx, `SELECT node_id, COALESCE(alias,''), COALESCE(last_report_at,0), COALESCE(muted_until,0), COALESCE(last_host_json,'{}'), COALESCE(last_services_json,'[]') FROM nodes`)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +179,7 @@ func loadNodes(ctx context.Context, d *sql.DB) ([]nodeState, error) {
 	out := make([]nodeState, 0)
 	for rows.Next() {
 		var n nodeState
-		if err := rows.Scan(&n.NodeID, &n.LastReportAt, &n.MutedUntil, &n.HostJSON, &n.ServicesJSON); err != nil {
+		if err := rows.Scan(&n.NodeID, &n.Alias, &n.LastReportAt, &n.MutedUntil, &n.HostJSON, &n.ServicesJSON); err != nil {
 			return nil, err
 		}
 		out = append(out, n)
@@ -231,11 +235,11 @@ func hostnameFromJSON(raw string) string {
 	return host.Hostname
 }
 
-func nodeMessage(hostname, message string) string {
-	if hostname == "" {
+func nodeMessage(name, message string) string {
+	if name == "" {
 		return message
 	}
-	return hostname + "：" + message
+	return name + "：" + message
 }
 
 func versionLess(a, b string) bool {

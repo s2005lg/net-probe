@@ -105,6 +105,7 @@ export type AlertStatus = "firing" | "recovered" | "acknowledged";
 export interface Alert {
   id: number;
   node_id: string;
+  alias: string;
   hostname: string;
   rule: string;
   status: AlertStatus;
