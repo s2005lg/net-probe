@@ -18,9 +18,11 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 
 func TestPanelSink(t *testing.T) {
 	var gotAuth string
+	var gotPath string
 	t.Setenv("T", "secret")
 	rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		gotAuth = req.Header.Get("Authorization")
+		gotPath = req.URL.Path
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Header:     make(http.Header),
@@ -41,6 +43,33 @@ func TestPanelSink(t *testing.T) {
 	}
 	if gotAuth != "Bearer secret" {
 		t.Fatalf("auth = %q", gotAuth)
+	}
+	if gotPath != "/api/v1/agents/report" {
+		t.Fatalf("panel path = %q", gotPath)
+	}
+}
+
+func TestWebhookSinkKeepsURL(t *testing.T) {
+	var gotPath string
+	rt := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		gotPath = req.URL.Path
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader("")),
+		}, nil
+	})
+	s, err := New(config.Sink{Type: "webhook", URL: "https://example.com/api/push/abc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hs := s.(*httpSink)
+	hs.client = &http.Client{Transport: rt}
+	if err := s.Send(context.Background(), []byte(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/api/push/abc" {
+		t.Fatalf("webhook path = %q", gotPath)
 	}
 }
 

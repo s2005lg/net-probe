@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/s2005lg/net-probe/internal/config"
@@ -53,7 +54,11 @@ func New(cfg config.Sink) (Sink, error) {
 }
 
 func (s *httpSink) Send(ctx context.Context, body []byte) error {
-	req, err := http.NewRequestWithContext(ctx, s.method, s.cfg.URL, bytes.NewReader(body))
+	url := s.cfg.URL
+	if s.cfg.Type == "panel" {
+		url = strings.TrimRight(url, "/") + "/api/v1/agents/report"
+	}
+	req, err := http.NewRequestWithContext(ctx, s.method, url, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
