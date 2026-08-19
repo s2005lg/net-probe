@@ -34,6 +34,9 @@ if [ -n "${NET_PROBE_PANEL_URL:-}" ]; then
     echo '[[sink]]'
     echo 'type = "panel"'
     echo "url = \"${NET_PROBE_PANEL_URL}\""
+    if [ "${NET_PROBE_PANEL_TLS_SKIP_VERIFY:-1}" != "0" ]; then
+      echo 'tls_skip_verify = true'
+    fi
     if [ -n "${NET_PROBE_PANEL_TOKEN:-}" ]; then
       install -d -m 0755 /etc/net-probe
       printf '%s\n' "${NET_PROBE_PANEL_TOKEN}" > /etc/net-probe/panel-token
