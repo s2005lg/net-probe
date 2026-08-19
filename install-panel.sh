@@ -20,6 +20,16 @@ else
   base="https://github.com/s2005lg/net-probe/releases/download/${version}"
 fi
 
+if [ -n "${NET_PROBE_PANEL_PORT:-}" ]; then
+  port="${NET_PROBE_PANEL_PORT}"
+else
+  port="$(shuf -i 20000-65535 -n 1)"
+fi
+if ! [[ "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+  echo "invalid NET_PROBE_PANEL_PORT: ${port}" >&2
+  exit 1
+fi
+
 curl -fsSL "${base}/net-probe-panel_linux_${arch}" -o /usr/local/bin/net-probe-panel
 chmod 755 /usr/local/bin/net-probe-panel
 
@@ -35,7 +45,7 @@ agent_token="${NET_PROBE_PANEL_AGENT_TOKEN:-$(openssl rand -hex 24)}"
 admin_password="${NET_PROBE_PANEL_ADMIN_PASSWORD:-$(openssl rand -hex 24)}"
 
 cat > /etc/net-probe-panel/config.toml <<EOF
-listen_addr = ":8443"
+listen_addr = ":${port}"
 data_dir = "/var/lib/net-probe-panel"
 node_timeout = "3m"
 
@@ -80,5 +90,6 @@ systemctl enable --now net-probe-panel.service
 
 echo "installed net-probe-panel ${version} for ${arch}"
 echo "config: /etc/net-probe-panel/config.toml"
+echo "listen port: ${port}"
 echo "agent token: ${agent_token}"
 echo "admin password: ${admin_password}"
