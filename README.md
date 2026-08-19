@@ -81,6 +81,20 @@ curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install-pane
        NET_PROBE_PANEL_ADMIN_PASSWORD="admin-password" bash
 ```
 
+To generate the agent token yourself instead of letting the installer pick a
+random one, use `openssl`:
+
+```bash
+openssl rand -hex 24
+```
+
+This prints a 48-character hex string. Use that exact value for
+`NET_PROBE_PANEL_AGENT_TOKEN` when installing the panel and for the panel sink
+token on the agent (for example `NET_PROBE_PANEL_TOKEN` in
+`/etc/net-probe/config.toml`); if they do not match, the panel rejects agent
+reports with `401 Unauthorized`. The token is stored in
+`/etc/net-probe-panel/config.toml` as `[agent].token` and must be kept secret.
+
 The panel:
 
 - writes the binary to `/usr/local/bin/net-probe-panel`
@@ -268,6 +282,14 @@ curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install-pane
 curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install-panel.sh |   sudo NET_PROBE_PANEL_VERSION=v0.2.0        NET_PROBE_PANEL_PORT=24443        NET_PROBE_PANEL_AGENT_TOKEN="agent-token"        NET_PROBE_PANEL_ADMIN_PASSWORD="admin-password" bash
 ```
 
+如需自己生成 Agent Token，而不是让安装脚本随机生成，可以使用 `openssl`：
+
+```bash
+openssl rand -hex 24
+```
+
+这会生成一个 48 位十六进制字符串。安装 panel 时，将该值作为 `NET_PROBE_PANEL_AGENT_TOKEN` 传入；在 Agent 侧，把同一个值设置为 panel sink 的 Token（例如 `/etc/net-probe/config.toml` 中的 `NET_PROBE_PANEL_TOKEN`）。两者不一致时，panel 会以 `401 Unauthorized` 拒绝 Agent 上报。Token 会保存在 `/etc/net-probe-panel/config.toml` 的 `[agent].token` 中，请妥善保管。
+
 panel 会：
 
 - 将二进制文件写入 `/usr/local/bin/net-probe-panel`
@@ -371,4 +393,3 @@ stats_kind: ""
 ```bash
 sudo systemctl restart net-probe.timer
 ```
-
