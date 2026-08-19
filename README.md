@@ -153,10 +153,9 @@ templates are loaded from `/etc/net-probe/services.d` by default.
 
 ## Security notes
 
-- The systemd unit runs as the `net-probe` user and sets
+- The agent runs as root so it can read `/proc/<pid>/fd` of other processes
+  (needed to report listening ports); the systemd unit still sets
   `NoNewPrivileges=true` and `ProtectSystem=strict`.
-- Only `/etc/net-probe` is writable by the service; the rest of the filesystem
-  is read-only from the service's perspective.
 - Panel sinks require HTTPS unless `insecure_allow_http = true` is explicitly
   set for localhost-only or otherwise trusted endpoints.
 - Secrets are not embedded in the report or config; use `token_env` or

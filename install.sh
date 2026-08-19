@@ -64,7 +64,6 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-User=net-probe
 ExecStart=/usr/local/bin/net-probe --config /etc/net-probe/config.toml
 NoNewPrivileges=true
 ProtectSystem=strict
