@@ -11,7 +11,7 @@ import {
   YAxis,
 } from "recharts";
 import StatusBadge from "../components/StatusBadge";
-import { api, type Metric, type Node } from "../lib/api";
+import { api, nodeName, type Metric, type Node } from "../lib/api";
 import {
   formatBytes,
   formatClock,
@@ -67,7 +67,7 @@ export default function NodeDetailPage() {
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="font-head text-2xl text-fg">{node.alias || node.node_id}</h1>
+          <h1 className="font-head text-2xl text-fg">{nodeName(node)}</h1>
           <p className="text-sm text-muted">
             {node.node_id} · 最后上报 {formatRelative(node.last_report_at)}
           </p>

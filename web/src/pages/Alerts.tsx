@@ -70,7 +70,7 @@ export default function AlertsPage() {
           <tbody className="divide-y divide-edge">
             {alerts.map((a) => (
               <tr key={a.id} className="hover:bg-surface">
-                <td className="px-3 py-2 text-fg">{a.node_id}</td>
+                <td className="px-3 py-2 text-fg">{a.hostname || a.node_id}</td>
                 <td className="px-3 py-2 text-muted">{a.rule}</td>
                 <td className="px-3 py-2">
                   <StatusBadge status={a.status} />

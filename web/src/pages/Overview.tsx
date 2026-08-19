@@ -10,7 +10,7 @@ import {
   YAxis,
 } from "recharts";
 import StatusBadge from "../components/StatusBadge";
-import { api, type Node, type Overview } from "../lib/api";
+import { api, nodeName, type Node, type Overview } from "../lib/api";
 
 const TOP_N = 10;
 const NODE_COLORS = [
@@ -31,10 +31,6 @@ type ChartDatum = {
   type: string;
   [key: string]: string | number;
 };
-
-function nodeLabel(node: Node): string {
-  return node.alias || node.node_id;
-}
 
 export default function OverviewPage() {
   const [overview, setOverview] = useState<Overview | null>(null);
@@ -116,15 +112,18 @@ export default function OverviewPage() {
     : null;
 
   const legendNodeId = (entry: {
-    value?: string | number;
-    dataKey?: string | number;
+    value?: unknown;
+    dataKey?: unknown;
   }): string | null => {
-    const dataKey = String(entry.dataKey ?? "");
+    const dataKey = typeof entry.dataKey === "string" ? entry.dataKey : "";
     if (dataKey && nodeAgg.some((item) => item.node.node_id === dataKey)) {
       return dataKey;
     }
-    const value = String(entry.value ?? "");
-    const match = nodeAgg.find((item) => nodeLabel(item.node) === value);
+    const value =
+      typeof entry.value === "string" || typeof entry.value === "number"
+        ? String(entry.value)
+        : "";
+    const match = nodeAgg.find((item) => nodeName(item.node) === value);
     return match?.node.node_id ?? null;
   };
 
@@ -167,13 +166,13 @@ export default function OverviewPage() {
                 <Legend
                   formatter={(value) => {
                     const node = nodeAgg.find((item) => item.node.node_id === value);
-                    return node ? nodeLabel(node.node) : value;
+                    return node ? nodeName(node.node) : value;
                   }}
-                  onMouseEnter={(data: { value?: string | number; dataKey?: string | number }) => {
+                  onMouseEnter={(data) => {
                     setHoveredNodeId(legendNodeId(data));
                   }}
                   onMouseLeave={() => setHoveredNodeId(null)}
-                  onClick={(data: { value?: string | number; dataKey?: string | number }) => {
+                  onClick={(data) => {
                     setSelectedType(null);
                     const key = legendNodeId(data);
                     if (!key) return;
@@ -185,7 +184,7 @@ export default function OverviewPage() {
                     key={item.node.node_id}
                     dataKey={item.node.node_id}
                     stackId="nodes"
-                    name={nodeLabel(item.node)}
+                    name={nodeName(item.node)}
                     fill={NODE_COLORS[index % NODE_COLORS.length]}
                     fillOpacity={focusNodeId && focusNodeId !== item.node.node_id ? 0.25 : 1}
                     radius={[0, 0, 0, 0]}
@@ -248,7 +247,7 @@ export default function OverviewPage() {
                         to={`/nodes/${encodeURIComponent(node.node_id)}`}
                         className="hover:text-ok"
                       >
-                        {nodeLabel(node)}
+                        {nodeName(node)}
                       </Link>
                     </td>
                     <td className="px-3 py-2 text-fg">{count}</td>
@@ -272,7 +271,7 @@ export default function OverviewPage() {
                   to={`/nodes/${encodeURIComponent(selectedNode.node_id)}`}
                   className="hover:text-ok"
                 >
-                  {nodeLabel(selectedNode)}
+                  {nodeName(selectedNode)}
                 </Link>{" "}
                 节点明细
               </h2>
@@ -327,7 +326,7 @@ export default function OverviewPage() {
                   to={`/nodes/${n.node_id}`}
                   className="flex items-center justify-between px-2 py-2 transition-colors hover:bg-surface focus:outline-none"
                 >
-                  <span className="text-fg">{n.alias || n.node_id}</span>
+                  <span className="text-fg">{nodeName(n)}</span>
                   <StatusBadge status={n.status} />
                 </Link>
               </li>

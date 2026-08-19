@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import StatusBadge from "../components/StatusBadge";
-import { api, type Node } from "../lib/api";
+import { api, nodeName, type Node } from "../lib/api";
 import { formatRelative } from "../lib/format";
 
 const PAGE_SIZE = 10;
@@ -21,7 +21,7 @@ export default function NodesPage() {
   const filtered = useMemo(
     () =>
       nodes.filter((n) => {
-        const text = `${n.alias} ${n.node_id} ${n.host.ipv4 ?? ""} ${n.host.ipv6 ?? ""}`.toLowerCase();
+        const text = `${nodeName(n)} ${n.node_id} ${n.host.ipv4 ?? ""} ${n.host.ipv6 ?? ""}`.toLowerCase();
         if (q && !text.includes(q.toLowerCase())) return false;
         if (status && n.status !== status) return false;
         return true;
@@ -48,7 +48,7 @@ export default function NodesPage() {
         <input
           value={q}
           onChange={(e) => setParam("q", e.target.value)}
-          placeholder="搜索名称 / IP"
+          placeholder="搜索主机名 / IP"
           aria-label="搜索"
           className="w-64 rounded border border-edge bg-panel px-3 py-2 text-sm text-fg outline-none focus:border-ok"
         />
@@ -81,7 +81,7 @@ export default function NodesPage() {
               <tr key={n.node_id} className="hover:bg-surface">
                 <td className="px-3 py-2">
                   <Link to={`/nodes/${n.node_id}`} className="text-fg hover:text-ok">
-                    {n.alias || n.node_id}
+                    {nodeName(n)}
                   </Link>
                 </td>
                 <td className="px-3 py-2 text-muted">{n.host.ipv4 || n.host.ipv6 || "—"}</td>

@@ -68,6 +68,10 @@ export interface Node {
   services: Service[];
 }
 
+export function nodeName(node: Node): string {
+  return node.host.hostname || node.alias || node.node_id;
+}
+
 export interface ServiceDist {
   type: string;
   count: number;
@@ -86,6 +90,7 @@ export type AlertStatus = "firing" | "recovered" | "acknowledged";
 export interface Alert {
   id: number;
   node_id: string;
+  hostname: string;
   rule: string;
   status: AlertStatus;
   message: string;
