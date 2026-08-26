@@ -29,6 +29,10 @@ jobs:
         run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o net-probe-panel_linux_amd64 ./cmd/net-probe-panel
       - name: Build panel linux arm64
         run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o net-probe-panel_linux_arm64 ./cmd/net-probe-panel
+      - name: Generate checksums
+        run: |
+          sha256sum net-probe_linux_amd64 net-probe_linux_arm64 net-probe-panel_linux_amd64 net-probe-panel_linux_arm64 > SHA256SUMS
+          sha256sum --check SHA256SUMS
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
@@ -37,3 +41,4 @@ jobs:
             net-probe_linux_arm64
             net-probe-panel_linux_amd64
             net-probe-panel_linux_arm64
+            SHA256SUMS
