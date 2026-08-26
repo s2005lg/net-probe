@@ -1,7 +1,7 @@
 # Release Hardening Design
 
 - Date: 2026-08-26
-- Status: Approved for implementation planning
+- Status: Approved for implementation (CI-runner revision)
 - Target: the next patch release after `v0.1.0`
 
 ## Goal
@@ -17,7 +17,7 @@ This hardening pass includes:
 - add the MIT license at the repository root;
 - replace the nonexistent `v0.2.0` panel example with the current `v0.1.0`;
 - generate and publish `SHA256SUMS` beside the four Linux release binaries;
-- exercise the panel-to-agent token handoff in a disposable Ubuntu container;
+- exercise the panel-to-agent token handoff on the disposable Ubuntu CI runner;
 - validate both installers with `bash -n` in CI;
 - add a TypeScript `typecheck` command and run it in CI;
 - lazy-load frontend routes so the initial JavaScript bundle stays small;
@@ -26,22 +26,24 @@ This hardening pass includes:
 
 ## Non-goals
 
-- Do not create or push a Git tag or GitHub release.
+- Do not create or push a Git tag or GitHub release. A feature-branch push is
+  allowed only to execute the revised CI verification.
 - Do not change the agent/panel authentication model.
 - Do not add per-node tokens, command dispatch, Docker discovery, or other v2
   features.
 - Do not introduce ESLint, Vitest, browser E2E infrastructure, or new npm
   dependencies.
-- Do not require a live VPS, a live systemd daemon, or external Panel service
-  in the test suite.
+- Do not require Docker, Colima, a live VPS, a live systemd daemon, or an
+  external Panel service in the test suite.
 
 ## Approach
 
 Use a dependency-light, balanced hardening approach. Shell contract tests cover
-repository release requirements, while installer smoke tests run the real
-scripts as root inside a disposable Ubuntu container with only external effects
-(downloads and systemd commands) replaced by deterministic fakes. The scripts
-continue to run unchanged for normal users.
+repository release requirements, while GitHub Actions runs the real installers
+as root on its disposable Ubuntu runner with only external effects (downloads
+and systemd commands) replaced by deterministic fakes. The scripts continue to
+run unchanged for normal users, and the developer machine needs no container
+runtime.
 
 Frontend quality gates use the existing TypeScript compiler and Vite. Route
 components are loaded with `React.lazy`, Vite emits separate page chunks, and a
@@ -66,10 +68,10 @@ produce a failing test, then becomes a permanent CI regression check.
 
 ### Installer smoke test
 
-`tests/installers-smoke.sh` runs inside Ubuntu as root. It creates deterministic
-fake `curl` and `systemctl` commands, executes `install-panel.sh` with a fixed
-port, token, password, and public URL, then executes `install.sh` without Panel
-environment variables. Assertions verify:
+`tests/installers-smoke.sh` runs only on the disposable Ubuntu CI runner as
+root. It creates deterministic fake `curl` and `systemctl` commands, executes
+`install-panel.sh` with a fixed port, token, password, and public URL, then
+executes `install.sh` without Panel environment variables. Assertions verify:
 
 - both downloaded binaries are installed and executable;
 - the Panel config contains the fixed listener and shared agent token;
@@ -79,9 +81,9 @@ environment variables. Assertions verify:
 - both installers request the expected systemd units;
 - Panel output includes a copyable cross-host Agent install command.
 
-The host-side `tests/installers-smoke-container.sh` launches the test with an
-Ubuntu 24.04 image and mounts the repository read-only. CI is responsible for
-providing Docker; no Docker dependency is added to the released binaries.
+CI invokes the test with `sudo bash tests/installers-smoke.sh`. The runner is
+discarded after the job, so its temporary system users and files never affect a
+developer machine or a deployed host.
 
 ### Release checksums
 
@@ -105,8 +107,8 @@ behavior remain unchanged.
 ## Error handling
 
 - Shell tests use `set -euo pipefail` and print the failed assertion.
-- Installer smoke tests never run directly against the developer host; the
-  wrapper requires Docker and always uses `--rm`.
+- Installer smoke tests refuse non-root execution and run only in GitHub
+  Actions; local verification checks their shell syntax without executing them.
 - The checksum step fails the release before upload if any artifact is missing
   or a generated digest cannot be verified.
 - The bundle checker reports the offending filename, actual byte count, and
@@ -117,20 +119,22 @@ behavior remain unchanged.
 The complete verification sequence is:
 
 1. `bash tests/release-contract.sh`
-2. `bash tests/installers-smoke-container.sh`
-3. `cd web && npm run verify`
-4. `go test ./...`
-5. `go vet ./...`
-6. `go build ./...`
-7. `bash -n install.sh install-panel.sh tests/*.sh`
-8. confirm `git status --short` contains only intended changes.
+2. `cd web && npm run verify`
+3. `go test ./...`
+4. `go vet ./...`
+5. `go build ./...`
+6. `bash -n install.sh install-panel.sh tests/*.sh`
+7. push only `codex/release-hardening` and wait for GitHub Actions, where
+   `sudo bash tests/installers-smoke.sh` executes the root-only smoke test.
+8. confirm the CI job succeeds and the local worktree is clean.
 
 ## Success criteria
 
-- All commands in the verification sequence exit with status 0.
+- All local commands and the pushed feature branch's CI job exit with status 0.
 - Installer smoke tests prove the current same-host token handoff end to end.
 - The release workflow publishes verified checksums for all four binaries.
 - The frontend production build has no JavaScript chunk larger than 512,000
   bytes.
 - No existing URL, API, installer default, or runtime behavior changes.
-- No tag, release, push, or deployment occurs during this work item.
+- No tag, GitHub Release, merge, or deployment occurs during this work item;
+  only the feature branch is pushed for CI verification.

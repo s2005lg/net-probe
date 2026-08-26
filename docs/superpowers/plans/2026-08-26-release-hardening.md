@@ -4,18 +4,18 @@
 
 **Goal:** Harden the next patch release with tested installers, verified release checksums, an MIT license, accurate documentation, and frontend type/bundle gates.
 
-**Architecture:** Keep production dependencies unchanged. Use shell contract tests for repository and workflow guarantees, run the real installers inside a disposable Ubuntu container with deterministic external-command fakes, and use the existing TypeScript/Vite toolchain for route splitting and a byte-based bundle check.
+**Architecture:** Keep production dependencies unchanged. Use shell contract tests for repository and workflow guarantees, run the real installers as root on GitHub Actions' disposable Ubuntu runner with deterministic external-command fakes, and use the existing TypeScript/Vite toolchain for route splitting and a byte-based bundle check.
 
-**Tech Stack:** Bash, GitHub Actions, Docker/Ubuntu 24.04, Go 1.23+, React 18, TypeScript 5.6, Vite 5.
+**Tech Stack:** Bash, GitHub Actions Ubuntu runner, Go 1.23+, React 18, TypeScript 5.6, Vite 5.
 
 ## Global Constraints
 
-- Do not create or push a Git tag or GitHub release.
+- Do not create or push a Git tag or GitHub release; push only the feature branch to execute CI.
 - Do not change authentication, API routes, installer defaults, or runtime behavior.
 - Do not introduce new Go modules, npm packages, ESLint, Vitest, or browser E2E infrastructure.
 - Keep normal `curl | sudo bash` installation behavior unchanged.
 - Enforce a maximum generated JavaScript chunk size of exactly 512,000 bytes.
-- Docker tests must use `--rm` and mount the repository read-only.
+- The root-only installer smoke test must run only on GitHub Actions' disposable Ubuntu runner.
 - Use the MIT license with copyright year 2026 and holder `s2005lg`.
 
 ---
@@ -129,39 +129,16 @@ git commit -m "chore: harden release artifacts"
 
 ---
 
-### Task 2: Disposable installer smoke coverage
+### Task 2: Ubuntu CI-runner installer smoke coverage
 
 **Files:**
 - Create: `tests/installers-smoke.sh`
-- Create: `tests/installers-smoke-container.sh`
 
 **Interfaces:**
 - Consumes: existing `install-panel.sh` and `install.sh` command-line/environment contracts.
-- Produces: a host wrapper that runs a root-only Ubuntu test without modifying the host.
+- Produces: a root-only Ubuntu smoke test that is executed only by CI.
 
-- [ ] **Step 1: Create a failing container wrapper**
-
-Create `tests/installers-smoke-container.sh` first with a call to the not-yet-created inner script:
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-docker run --rm \
-  -v "$repo_dir:/work:ro" \
-  -w /work \
-  ubuntu:24.04 \
-  bash tests/installers-smoke.sh
-```
-
-- [ ] **Step 2: Run the wrapper and verify RED**
-
-Run: `bash tests/installers-smoke-container.sh`
-
-Expected: nonzero exit because `tests/installers-smoke.sh` does not exist.
-
-- [ ] **Step 3: Add deterministic external-command fakes**
+- [ ] **Step 1: Add deterministic external-command fakes**
 
 Create `tests/installers-smoke.sh` with the complete deterministic test:
 
@@ -171,6 +148,7 @@ set -euo pipefail
 
 [ "$(id -u)" -eq 0 ] || { echo "installer smoke must run as root" >&2; exit 1; }
 
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 test_dir="$(mktemp -d /tmp/net-probe-installer-smoke.XXXXXX)"
 fake_bin="$test_dir/bin"
 systemctl_log="$test_dir/systemctl.log"
@@ -209,9 +187,9 @@ NET_PROBE_PANEL_PORT=24443 \
 NET_PROBE_PANEL_AGENT_TOKEN=test-agent-token \
 NET_PROBE_PANEL_ADMIN_PASSWORD=test-admin-password \
 NET_PROBE_PANEL_PUBLIC_URL=https://panel.example.test:24443 \
-  bash /work/install-panel.sh > "$test_dir/panel-install.out"
+  bash "$repo_dir/install-panel.sh" > "$test_dir/panel-install.out"
 
-NET_PROBE_VERSION=v0.1.0 bash /work/install.sh > "$test_dir/agent-install.out"
+NET_PROBE_VERSION=v0.1.0 bash "$repo_dir/install.sh" > "$test_dir/agent-install.out"
 
 [ -x /usr/local/bin/net-probe-panel ] || fail "panel binary is not executable"
 [ -x /usr/local/bin/net-probe ] || fail "agent binary is not executable"
@@ -230,23 +208,23 @@ contains "$test_dir/panel-install.out" 'NET_PROBE_PANEL_TOKEN="test-agent-token"
 echo "installer smoke: PASS"
 ```
 
-- [ ] **Step 4: Exercise Panel install then same-host Agent install**
+- [ ] **Step 2: Exercise Panel install then same-host Agent install**
 
-Review the complete script from Step 3 and confirm it executes the Panel first,
+Review the complete script from Step 1 and confirm it executes the Panel first,
 then the Agent without `NET_PROBE_PANEL_URL` or `NET_PROBE_PANEL_TOKEN`. This is
 the exact condition that exercises same-host discovery rather than the explicit
 environment-variable path.
 
-- [ ] **Step 5: Run the installer smoke test and verify GREEN**
+- [ ] **Step 3: Verify the smoke test is safe for CI**
 
-Run: `bash tests/installers-smoke-container.sh`
+Run: `bash -n tests/installers-smoke.sh`
 
-Expected: `installer smoke: PASS` and exit 0.
+Expected: exit 0. Do not execute the root-only smoke test on the developer host.
 
-- [ ] **Step 6: Commit Task 2**
+- [ ] **Step 4: Commit Task 2**
 
 ```bash
-git add tests/installers-smoke.sh tests/installers-smoke-container.sh
+git add tests/installers-smoke.sh
 git commit -m "test: smoke test installer token handoff"
 ```
 
@@ -356,7 +334,7 @@ git commit -m "perf: enforce frontend bundle budget"
 - Modify: `.github/workflows/ci.yml:1-15`
 
 **Interfaces:**
-- Consumes: `tests/release-contract.sh`, `tests/installers-smoke-container.sh`, and `web`'s `verify` npm script.
+- Consumes: `tests/release-contract.sh`, `tests/installers-smoke.sh`, and `web`'s `verify` npm script.
 - Produces: one CI job that rejects release-contract, installer, frontend, Go test, vet, or build regressions.
 
 - [ ] **Step 1: Write the failing CI contract test**
@@ -374,7 +352,7 @@ contains() { grep -Fq -- "$2" "$1" || fail "$1 missing: $2"; }
 
 contains "$ci" "bash -n install.sh install-panel.sh tests/*.sh"
 contains "$ci" "bash tests/release-contract.sh"
-contains "$ci" "bash tests/installers-smoke-container.sh"
+contains "$ci" "sudo bash tests/installers-smoke.sh"
 contains "$ci" "npm run verify"
 contains "$ci" "go test ./..."
 contains "$ci" "go vet ./..."
@@ -399,7 +377,7 @@ Add steps, in this order, for:
       - name: Check release contract
         run: bash tests/release-contract.sh
       - name: Smoke test installers
-        run: bash tests/installers-smoke-container.sh
+        run: sudo bash tests/installers-smoke.sh
 ```
 
 Keep `go test ./...` and `go vet ./...`, then add `go build ./...`.
@@ -421,7 +399,6 @@ Expected: every command exits 0 and prints both contract PASS lines.
 Run:
 
 ```bash
-bash tests/installers-smoke-container.sh
 (cd web && npm run verify)
 go test ./...
 go vet ./...
@@ -430,7 +407,7 @@ git diff --check
 git status --short
 ```
 
-Expected: all commands exit 0; status lists only the Task 4 CI/test changes before commit.
+Expected: all local commands exit 0; status lists only the Task 4 CI/test changes before commit. The installer smoke executes later on the pushed feature branch's CI runner.
 
 - [ ] **Step 6: Commit Task 4**
 
@@ -439,7 +416,20 @@ git add .github/workflows/ci.yml tests/ci-contract.sh
 git commit -m "ci: add release hardening gates"
 ```
 
-- [ ] **Step 7: Verify clean branch after all commits**
+- [ ] **Step 7: Push the feature branch and verify GitHub Actions**
+
+Run:
+
+```bash
+git push -u origin codex/release-hardening
+gh run list --branch codex/release-hardening --limit 1
+```
+
+Wait for the run to finish, then run `gh run view <run-id> --log-failed` if it
+fails. Expected: the CI job succeeds, including `sudo bash
+tests/installers-smoke.sh`. Do not create a tag, release, merge, or deployment.
+
+- [ ] **Step 8: Verify clean branch after all commits**
 
 Run:
 
