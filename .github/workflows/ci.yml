@@ -9,7 +9,14 @@ jobs:
         with: { go-version: '1.23' }
       - uses: actions/setup-node@v4
         with: { node-version: '20' }
-      - name: Build frontend
-        run: cd web && npm ci && npm run build
+      - name: Check shell syntax
+        run: bash -n install.sh install-panel.sh tests/*.sh
+      - name: Check release contract
+        run: bash tests/release-contract.sh
+      - name: Smoke test installers
+        run: sudo bash tests/installers-smoke.sh
+      - name: Verify frontend
+        run: cd web && npm ci && npm run verify
       - run: go test ./...
       - run: go vet ./...
+      - run: go build ./...
