@@ -428,7 +428,7 @@ git add .github/workflows/ci.yml tests/ci-contract.sh
 git commit -m "ci: add release hardening gates"
 ```
 
-- [ ] **Step 7: Push the feature branch and verify GitHub Actions**
+- [x] **Step 7: Push the feature branch and verify GitHub Actions**
 
 Run:
 
@@ -441,7 +441,7 @@ Wait for the run to finish, then run `gh run view <run-id> --log-failed` if it
 fails. Expected: the CI job succeeds, including `sudo bash
 tests/installers-smoke.sh`. Do not create a tag, release, merge, or deployment.
 
-- [ ] **Step 8: Verify clean branch after all commits**
+- [x] **Step 8: Verify clean branch after all commits**
 
 Run:
 
@@ -450,4 +450,16 @@ git status --short --branch
 git log --oneline --decorate -6
 ```
 
-Expected: clean feature branch containing the design, plan, and four implementation commits; no tag, push, release, or deployment.
+Expected: clean feature branch containing the design, plan, and implementation
+commits; no tag, GitHub Release, merge, or deployment. Only the feature branch
+is pushed for CI verification.
+
+## Verification evidence
+
+- Local: release contract, CI contract, shell syntax, `npm run verify`,
+  `go test ./...`, `go vet ./...`, `go build ./...`, and `git diff --check`
+  exited 0 on 2026-08-27.
+- GitHub Actions: CI run
+  `https://github.com/s2005lg/net-probe/actions/runs/33033147015` succeeded in
+  1m22s, including the opted-in root installer smoke test.
+- No tag, GitHub Release, merge, or deployment was created.
