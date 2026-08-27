@@ -104,7 +104,7 @@ prints all three at the end. To pin a version or preset them:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install-panel.sh | \
-  sudo NET_PROBE_PANEL_VERSION=v0.2.0 \
+  sudo NET_PROBE_PANEL_VERSION=v0.1.0 \
        NET_PROBE_PANEL_PORT=24443 \
        NET_PROBE_PANEL_AGENT_TOKEN="agent-token" \
        NET_PROBE_PANEL_ADMIN_PASSWORD="admin-password" bash
@@ -330,7 +330,7 @@ curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install-pane
 安装脚本会随机生成端口、Agent Token 和管理员密码，并在最后打印这三项信息。如需固定版本或预先指定：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install-panel.sh |   sudo NET_PROBE_PANEL_VERSION=v0.2.0        NET_PROBE_PANEL_PORT=24443        NET_PROBE_PANEL_AGENT_TOKEN="agent-token"        NET_PROBE_PANEL_ADMIN_PASSWORD="admin-password" bash
+curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install-panel.sh |   sudo NET_PROBE_PANEL_VERSION=v0.1.0        NET_PROBE_PANEL_PORT=24443        NET_PROBE_PANEL_AGENT_TOKEN="agent-token"        NET_PROBE_PANEL_ADMIN_PASSWORD="admin-password" bash
 ```
 
 如需自己生成 Agent Token，而不是让安装脚本随机生成，可以使用 `openssl`：
