@@ -59,7 +59,9 @@ JavaScript chunk is larger than 512,000 bytes.
 - `LICENSE` contains the MIT license grant;
 - README version-pinning examples reference `v0.1.0` and contain no `v0.2.0`;
 - the release workflow generates `SHA256SUMS`;
-- the release workflow uploads `SHA256SUMS` with the binaries;
+- the release workflow's `Publish release` file block uploads `SHA256SUMS` with
+  the binaries;
+- the release workflow runs the same frontend `verify` gate as CI;
 - CI invokes installer smoke tests, frontend verification, Go tests, vet, and
   build.
 
@@ -74,6 +76,8 @@ root. It creates deterministic fake `curl` and `systemctl` commands, executes
 executes `install.sh` without Panel environment variables. Assertions verify:
 
 - both downloaded binaries are installed and executable;
+- both downloads use the exact `v0.1.0` repository, architecture, artifact
+  name, and destination path; unknown `curl` calls fail the test;
 - the Panel config contains the fixed listener and shared agent token;
 - the Agent discovers the same-host Panel URL and token;
 - the Agent config selects the panel sink with self-signed TLS trust enabled;
@@ -84,6 +88,10 @@ executes `install.sh` without Panel environment variables. Assertions verify:
 CI invokes the test with `sudo bash tests/installers-smoke.sh`. The runner is
 discarded after the job, so its temporary system users and files never affect a
 developer machine or a deployed host.
+
+The script additionally requires `GITHUB_ACTIONS=true`, `RUNNER_OS=Linux`, and
+the workflow-only `NET_PROBE_INSTALLER_SMOKE=1` opt-in before it checks for root
+or performs any write. This prevents accidental execution on a real root host.
 
 ### Release checksums
 

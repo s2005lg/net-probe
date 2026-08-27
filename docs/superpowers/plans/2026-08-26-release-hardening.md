@@ -18,6 +18,18 @@
 - The root-only installer smoke test must run only on GitHub Actions' disposable Ubuntu runner.
 - Use the MIT license with copyright year 2026 and holder `s2005lg`.
 
+## Code-review amendments
+
+- The root installer smoke test must require `GITHUB_ACTIONS=true`,
+  `RUNNER_OS=Linux`, and `NET_PROBE_INSTALLER_SMOKE=1` before any system write.
+- The fake downloader must reject every request except the two exact `v0.1.0`
+  agent/panel artifact URL and destination pairs for the runner architecture.
+- The release contract must parse the `Publish release` file list instead of
+  counting checksum text occurrences.
+- CI must execute both repository contract scripts.
+- The tag-triggered release job must use `npm run verify`, not build alone, so
+  publishing cannot bypass type or bundle gates.
+
 ---
 
 ### Task 1: Release documentation, license, and checksums
@@ -32,7 +44,7 @@
 - Consumes: four release artifact names already emitted by `.github/workflows/release.yml`.
 - Produces: `SHA256SUMS`, uploaded beside all four binaries; `tests/release-contract.sh` for CI reuse.
 
-- [ ] **Step 1: Write the failing release contract test**
+- [x] **Step 1: Write the failing release contract test**
 
 Create `tests/release-contract.sh` with strict mode and these assertions:
 
@@ -65,13 +77,13 @@ at_least .github/workflows/release.yml "SHA256SUMS" 3
 echo "release contract: PASS"
 ```
 
-- [ ] **Step 2: Run the contract test and verify RED**
+- [x] **Step 2: Run the contract test and verify RED**
 
 Run: `bash tests/release-contract.sh`
 
 Expected: exit 1 with `FAIL: LICENSE is missing`.
 
-- [ ] **Step 3: Add the MIT license and correct the README version**
+- [x] **Step 3: Add the MIT license and correct the README version**
 
 Create `LICENSE` with the complete MIT license text:
 
@@ -101,7 +113,7 @@ SOFTWARE.
 
 Replace both English and Chinese `NET_PROBE_PANEL_VERSION=v0.2.0` examples with `v0.1.0`.
 
-- [ ] **Step 4: Generate and verify release checksums**
+- [x] **Step 4: Generate and verify release checksums**
 
 Insert after all four build steps:
 
@@ -114,13 +126,13 @@ Insert after all four build steps:
 
 Add `SHA256SUMS` to `softprops/action-gh-release`'s `files` list.
 
-- [ ] **Step 5: Run the contract test and verify GREEN**
+- [x] **Step 5: Run the contract test and verify GREEN**
 
 Run: `bash tests/release-contract.sh`
 
 Expected: `release contract: PASS` and exit 0.
 
-- [ ] **Step 6: Commit Task 1**
+- [x] **Step 6: Commit Task 1**
 
 ```bash
 git add LICENSE README.md .github/workflows/release.yml tests/release-contract.sh
@@ -138,7 +150,7 @@ git commit -m "chore: harden release artifacts"
 - Consumes: existing `install-panel.sh` and `install.sh` command-line/environment contracts.
 - Produces: a root-only Ubuntu smoke test that is executed only by CI.
 
-- [ ] **Step 1: Add deterministic external-command fakes**
+- [x] **Step 1: Add deterministic external-command fakes**
 
 Create `tests/installers-smoke.sh` with the complete deterministic test:
 
@@ -208,20 +220,20 @@ contains "$test_dir/panel-install.out" 'NET_PROBE_PANEL_TOKEN="test-agent-token"
 echo "installer smoke: PASS"
 ```
 
-- [ ] **Step 2: Exercise Panel install then same-host Agent install**
+- [x] **Step 2: Exercise Panel install then same-host Agent install**
 
 Review the complete script from Step 1 and confirm it executes the Panel first,
 then the Agent without `NET_PROBE_PANEL_URL` or `NET_PROBE_PANEL_TOKEN`. This is
 the exact condition that exercises same-host discovery rather than the explicit
 environment-variable path.
 
-- [ ] **Step 3: Verify the smoke test is safe for CI**
+- [x] **Step 3: Verify the smoke test is safe for CI**
 
 Run: `bash -n tests/installers-smoke.sh`
 
 Expected: exit 0. Do not execute the root-only smoke test on the developer host.
 
-- [ ] **Step 4: Commit Task 2**
+- [x] **Step 4: Commit Task 2**
 
 ```bash
 git add tests/installers-smoke.sh
@@ -241,7 +253,7 @@ git commit -m "test: smoke test installer token handoff"
 - Consumes: Vite output under `web/dist/assets` and existing default page exports.
 - Produces: npm scripts `typecheck`, `check:bundle`, and `verify`; lazy route chunks with unchanged paths.
 
-- [ ] **Step 1: Write the bundle-size checker**
+- [x] **Step 1: Write the bundle-size checker**
 
 Create `web/scripts/check-bundle.mjs`:
 
@@ -267,13 +279,13 @@ if (oversized.length > 0) {
 console.log(`bundle check: PASS (${chunks.length} chunks, limit ${limit} bytes)`);
 ```
 
-- [ ] **Step 2: Build current frontend and verify RED**
+- [x] **Step 2: Build current frontend and verify RED**
 
 Run: `cd web && npm run build && node scripts/check-bundle.mjs`
 
 Expected: exit 1 reporting the current approximately 606 KB `index-*.js` chunk exceeds 512,000 bytes.
 
-- [ ] **Step 3: Lazy-load all route pages**
+- [x] **Step 3: Lazy-load all route pages**
 
 Replace eager page imports in `web/src/App.tsx` with:
 
@@ -297,7 +309,7 @@ Wrap the existing `<Routes>` element in:
 </Suspense>
 ```
 
-- [ ] **Step 4: Add dependency-free verification scripts**
+- [x] **Step 4: Add dependency-free verification scripts**
 
 Set `web/package.json` scripts to:
 
@@ -312,13 +324,13 @@ Set `web/package.json` scripts to:
 }
 ```
 
-- [ ] **Step 5: Run frontend verification and verify GREEN**
+- [x] **Step 5: Run frontend verification and verify GREEN**
 
 Run: `cd web && npm run verify`
 
 Expected: TypeScript exits 0, Vite emits multiple page chunks, and the final line starts with `bundle check: PASS`.
 
-- [ ] **Step 6: Commit Task 3**
+- [x] **Step 6: Commit Task 3**
 
 ```bash
 git add web/package.json web/src/App.tsx web/scripts/check-bundle.mjs
@@ -337,7 +349,7 @@ git commit -m "perf: enforce frontend bundle budget"
 - Consumes: `tests/release-contract.sh`, `tests/installers-smoke.sh`, and `web`'s `verify` npm script.
 - Produces: one CI job that rejects release-contract, installer, frontend, Go test, vet, or build regressions.
 
-- [ ] **Step 1: Write the failing CI contract test**
+- [x] **Step 1: Write the failing CI contract test**
 
 Create `tests/ci-contract.sh`:
 
@@ -360,13 +372,13 @@ contains "$ci" "go build ./..."
 echo "CI contract: PASS"
 ```
 
-- [ ] **Step 2: Run the CI contract and verify RED**
+- [x] **Step 2: Run the CI contract and verify RED**
 
 Run: `bash tests/ci-contract.sh`
 
 Expected: exit 1 because the current CI lacks installer syntax checks.
 
-- [ ] **Step 3: Expand the CI job**
+- [x] **Step 3: Expand the CI job**
 
 Replace the frontend build command with `cd web && npm ci && npm run verify`.
 Add steps, in this order, for:
@@ -382,7 +394,7 @@ Add steps, in this order, for:
 
 Keep `go test ./...` and `go vet ./...`, then add `go build ./...`.
 
-- [ ] **Step 4: Run focused CI checks and verify GREEN**
+- [x] **Step 4: Run focused CI checks and verify GREEN**
 
 Run:
 
@@ -394,7 +406,7 @@ bash tests/release-contract.sh
 
 Expected: every command exits 0 and prints both contract PASS lines.
 
-- [ ] **Step 5: Run the complete verification sequence**
+- [x] **Step 5: Run the complete verification sequence**
 
 Run:
 
@@ -409,7 +421,7 @@ git status --short
 
 Expected: all local commands exit 0; status lists only the Task 4 CI/test changes before commit. The installer smoke executes later on the pushed feature branch's CI runner.
 
-- [ ] **Step 6: Commit Task 4**
+- [x] **Step 6: Commit Task 4**
 
 ```bash
 git add .github/workflows/ci.yml tests/ci-contract.sh

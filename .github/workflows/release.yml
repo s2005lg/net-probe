@@ -19,8 +19,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - name: Build frontend
-        run: cd web && npm ci && npm run build
+      - name: Verify frontend
+        run: cd web && npm ci && npm run verify
       - name: Build agent linux amd64
         run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o net-probe_linux_amd64 ./cmd/net-probe
       - name: Build agent linux arm64

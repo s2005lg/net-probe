@@ -13,8 +13,10 @@ jobs:
         run: bash -n install.sh install-panel.sh tests/*.sh
       - name: Check release contract
         run: bash tests/release-contract.sh
+      - name: Check CI contract
+        run: bash tests/ci-contract.sh
       - name: Smoke test installers
-        run: sudo bash tests/installers-smoke.sh
+        run: sudo env GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_OS="$RUNNER_OS" NET_PROBE_INSTALLER_SMOKE=1 bash tests/installers-smoke.sh
       - name: Verify frontend
         run: cd web && npm ci && npm run verify
       - run: go test ./...
