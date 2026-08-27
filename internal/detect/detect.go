@@ -54,6 +54,13 @@ func Detect(ctx context.Context, reg *Registry, cfg config.DetectConfig, statsCf
 			Capabilities: &capabilities,
 			Status:       "ok",
 		}
+		if tmpl.ID == "xray" || tmpl.ID == "sing-box" {
+			protocols, protocolErr := DiscoverProtocols(tmpl.ID, info.ExecArgs, tmpl.StatsConfigPaths)
+			svc.Protocols = protocols
+			if protocolErr != nil && deps.Logf != nil {
+				deps.Logf("service %s protocol discovery: %v", tmpl.ID, protocolErr)
+			}
+		}
 		if info.ExecStart != "" {
 			if v, err := Version(ctx, deps.Runner, info.ExecStart, tmpl.VersionCmd); err == nil {
 				svc.Version = v

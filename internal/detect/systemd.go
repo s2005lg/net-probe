@@ -25,6 +25,7 @@ type UnitInfo struct {
 	MainPID   int
 	NRestarts int
 	ExecStart string
+	ExecArgs  []string
 }
 
 func ListUnitNames(ctx context.Context, r Runner) ([]string, error) {
@@ -65,19 +66,32 @@ func ShowUnit(ctx context.Context, r Runner, name string) (UnitInfo, error) {
 		case "NRestarts":
 			u.NRestarts, _ = strconv.Atoi(v)
 		case "ExecStart":
-			u.ExecStart = parseExecStart(v)
+			u.ExecStart, u.ExecArgs = parseExecStart(v)
 		}
 	}
 	return u, nil
 }
 
-func parseExecStart(v string) string {
+func parseExecStart(v string) (string, []string) {
 	// ExecStart 形如：{ path=/usr/bin/x ; argv[]=/usr/bin/x ... }
+	var path string
 	if i := strings.Index(v, "path="); i >= 0 {
 		rest := v[i+len("path="):]
 		if j := strings.IndexAny(rest, " ;"); j >= 0 {
-			return rest[:j]
+			path = rest[:j]
+		} else {
+			path = rest
 		}
 	}
-	return v
+	if i := strings.Index(v, "argv[]="); i >= 0 {
+		rest := v[i+len("argv[]="):]
+		if j := strings.Index(rest, " ;"); j >= 0 {
+			rest = rest[:j]
+		}
+		return path, strings.Fields(rest)
+	}
+	if path == "" {
+		path = v
+	}
+	return path, nil
 }

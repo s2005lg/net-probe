@@ -28,6 +28,10 @@ func TestShowUnit(t *testing.T) {
 	if u.ExecStart != "/usr/local/bin/hysteria" {
 		t.Fatalf("ExecStart = %q", u.ExecStart)
 	}
+	wantArgs := []string{"/usr/local/bin/hysteria", "server", "-c", "/etc/hysteria/config.yaml"}
+	if !reflect.DeepEqual(u.ExecArgs, wantArgs) {
+		t.Fatalf("ExecArgs = %#v, want %#v", u.ExecArgs, wantArgs)
+	}
 }
 
 func TestListUnitNames(t *testing.T) {
@@ -41,5 +45,12 @@ func TestListUnitNames(t *testing.T) {
 	want := []string{"hysteria-server.service", "xray.service"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ListUnitNames() = %#v, want %#v", got, want)
+	}
+}
+
+func TestParseExecStartWithoutSystemdFieldsPreservesRawValue(t *testing.T) {
+	got, args := parseExecStart("/usr/local/bin/hysteria server")
+	if got != "/usr/local/bin/hysteria server" || args != nil {
+		t.Fatalf("parseExecStart() = %q, %#v", got, args)
 	}
 }

@@ -3,6 +3,8 @@ package detect
 import (
 	"context"
 	"errors"
+	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/s2005lg/net-probe/internal/config"
@@ -25,6 +27,31 @@ func TestDetectKnownUnit(t *testing.T) {
 	}
 	if len(svcs) != 1 || svcs[0].Type != "hysteria2" || !svcs[0].Active {
 		t.Fatalf("svcs = %+v", svcs)
+	}
+}
+
+func TestDetectXrayVLESSRemainsSingleService(t *testing.T) {
+	path := writeProtocolConfig(t, `{"inbounds":[{"protocol":"vless","settings":{"clients":[{"id":"secret-uuid"}]}}]}`)
+	reg, err := NewRegistry([]Template{{
+		ID: "xray", Units: []string{"xray"}, StatsKind: "xray",
+		StatsConfigPaths: []string{filepath.Join(t.TempDir(), "unused.json")},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := fakeRunner{out: map[string]string{
+		"systemctl list-unit-files --type=service --no-legend --no-pager":                               "xray.service enabled\n",
+		"systemctl show xray --property=ActiveState,SubState,UnitFileState,NRestarts,MainPID,ExecStart": "ActiveState=active\nUnitFileState=enabled\nMainPID=10\nExecStart={ path=/usr/bin/xray ; argv[]=/usr/bin/xray run -config " + path + " ; ignore_errors=no }",
+	}}
+	svcs, err := Detect(context.Background(), reg, config.DetectConfig{}, config.StatsConfig{}, Deps{Runner: r, ProcRoot: "/nonexistent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(svcs) != 1 {
+		t.Fatalf("services = %+v", svcs)
+	}
+	if svcs[0].Type != "xray" || svcs[0].Protocols == nil || svcs[0].Protocols.State != "ok" || !reflect.DeepEqual(svcs[0].Protocols.Items, []string{"vless"}) {
+		t.Fatalf("service = %+v", svcs[0])
 	}
 }
 
