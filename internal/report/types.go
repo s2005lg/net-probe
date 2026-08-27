@@ -93,24 +93,24 @@ type ProtocolInfo struct {
 }
 
 type Service struct {
-	Type      string   `json:"type"`
-	Runtime   string   `json:"runtime"`
-	Unit      string   `json:"unit,omitempty"`
-	Binary    string   `json:"binary,omitempty"`
-	Version   string   `json:"version,omitempty"`
-	Active    bool     `json:"active"`
-	Enabled   bool     `json:"enabled"`
-	MainPID   int      `json:"main_pid,omitempty"`
-	NRestarts int      `json:"n_restarts,omitempty"`
-	Listen    []Listen `json:"listen"`
-	ListenOK  bool     `json:"listen_ok"`
-	Cert      *Cert    `json:"cert,omitempty"`
-	Stats     *Stats   `json:"stats,omitempty"`
-	Protocols     *ProtocolInfo         `json:"protocols,omitempty"`
-	Capabilities *ServiceCapabilities  `json:"capabilities,omitempty"`
-	Telemetry    *ServiceTelemetry      `json:"telemetry,omitempty"`
-	Status       string                 `json:"status"`
-	Error        string                 `json:"error,omitempty"`
+	Type         string               `json:"type"`
+	Runtime      string               `json:"runtime"`
+	Unit         string               `json:"unit,omitempty"`
+	Binary       string               `json:"binary,omitempty"`
+	Version      string               `json:"version,omitempty"`
+	Active       bool                 `json:"active"`
+	Enabled      bool                 `json:"enabled"`
+	MainPID      int                  `json:"main_pid,omitempty"`
+	NRestarts    int                  `json:"n_restarts,omitempty"`
+	Listen       []Listen             `json:"listen"`
+	ListenOK     bool                 `json:"listen_ok"`
+	Cert         *Cert                `json:"cert,omitempty"`
+	Stats        *Stats               `json:"stats,omitempty"`
+	Protocols    *ProtocolInfo        `json:"protocols,omitempty"`
+	Capabilities *ServiceCapabilities `json:"capabilities,omitempty"`
+	Telemetry    *ServiceTelemetry    `json:"telemetry,omitempty"`
+	Status       string               `json:"status"`
+	Error        string               `json:"error,omitempty"`
 }
 
 // PopulateLegacyStats projects successful telemetry observations into the
