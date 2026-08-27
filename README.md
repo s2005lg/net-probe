@@ -196,6 +196,41 @@ The built-in detection templates are:
 See `internal/detect/builtin/*.yaml` for the built-in patterns. Custom
 templates are loaded from `/etc/net-probe/services.d` by default.
 
+## Service telemetry and protocol tags
+
+The eight entries above are **service implementations** detected as systemd
+units or binaries. Protocols are tags on a detected service instance: VLESS is
+an Xray or sing-box protocol tag, not a ninth standalone daemon. Traffic and
+online-client telemetry is an aggregate for that service instance; it is not a
+per-VLESS-inbound or per-user total.
+
+Reports keep schema version `1`. The additive `capabilities` and `telemetry`
+fields describe each metric independently:
+
+- Capability `supported` means the Agent has a collector; an `ok` observation
+  is shown as its numeric value.
+- Capability `unsupported` with `native_api_unavailable` is labelled
+  `内核不支持` in the Panel; with `collector_not_implemented` it is labelled
+  `探针暂未支持`.
+- Capability `unknown` (and unrecognized future capability values) is labelled
+  `能力未知，请升级探针`.
+- Observation `not_configured` is labelled `需启用统计接口`; `disabled` is
+  labelled `已禁用`; and `error` is labelled `采集失败` (with a safe error code
+  available as detail). An `ok` observation may legitimately contain zero.
+
+Disable one service's telemetry collector without hiding the detected service:
+
+```toml
+[stats.services.<type>]
+enabled = false
+```
+
+Older Agents that only send legacy `stats` reports remain accepted. Their
+capability labels are necessarily less precise, so upgrade Agents to receive
+explicit capability and observation states. When telemetry is present, a new
+Panel uses it instead of the lossy legacy `stats` fields, including when the
+telemetry observation is an error.
+
 ## Security notes
 
 - The agent runs as root so it can read `/proc/<pid>/fd` of other processes
@@ -404,6 +439,26 @@ net-probe --version
 - AnyTLS
 
 内置匹配规则位于 `internal/detect/builtin/*.yaml`。默认从 `/etc/net-probe/services.d` 加载自定义模板。
+
+### 服务遥测与协议标签
+
+上面的八项是按 systemd 单元或二进制文件识别的**服务实现**。协议是已识别服务实例上的标签：VLESS 是 Xray 或 sing-box 的协议标签，不是第九个独立守护进程。流量和在线连接遥测都是该服务实例的聚合值，不是按 VLESS 入站或用户拆分的总计。
+
+报告仍使用 schema version `1`。新增的 `capabilities` 和 `telemetry` 字段分别说明每项指标：
+
+- `supported` 表示 Agent 具有采集器；观测状态为 `ok` 时，Panel 显示对应数值。
+- `unsupported` 且原因为 `native_api_unavailable` 时显示 `内核不支持`；原因为 `collector_not_implemented` 时显示 `探针暂未支持`。
+- `unknown`（以及无法识别的未来能力值）显示 `能力未知，请升级探针`。
+- 观测状态 `not_configured` 显示 `需启用统计接口`，`disabled` 显示 `已禁用`，`error` 显示 `采集失败`（可查看安全的错误代码）。`ok` 状态的数值可以合法地为零。
+
+使用下面的配置可禁用某一个服务的遥测采集器，但不会隐藏已识别的服务：
+
+```toml
+[stats.services.<type>]
+enabled = false
+```
+
+只发送旧版 `stats` 报告的 Agent 仍可被接收，但其能力标签无法同样精确；建议升级 Agent，以获得明确的能力和观测状态。新 Panel 在遥测字段存在时会使用遥测字段，而不会使用有损的旧版 `stats`，即使遥测结果为错误也是如此。
 
 ### 安全说明
 
