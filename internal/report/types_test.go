@@ -59,3 +59,39 @@ func TestStatsOnlineClients(t *testing.T) {
 		t.Fatalf("json = %s", b)
 	}
 }
+
+func uint64ptr(v uint64) *uint64 { return &v }
+
+func TestTelemetryMarshalPreservesSuccessfulZero(t *testing.T) {
+	svc := Service{
+		Type: "xray",
+		Capabilities: &ServiceCapabilities{
+			Traffic:       MetricCapability{Support: CapabilitySupported, Source: "native_api"},
+			OnlineClients: MetricCapability{Support: CapabilitySupported, Source: "native_api"},
+		},
+		Telemetry: &ServiceTelemetry{
+			Traffic:       &TrafficTelemetry{State: ObservationOK, TxBytes: uint64ptr(0), RxBytes: uint64ptr(0)},
+			OnlineClients: &CountTelemetry{State: ObservationOK, Value: uint64ptr(0)},
+		},
+	}
+	b, err := json.Marshal(svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"tx_bytes":0`, `"rx_bytes":0`, `"value":0`} {
+		if !strings.Contains(string(b), want) {
+			t.Fatalf("json %s missing %s", b, want)
+		}
+	}
+}
+
+func TestPopulateLegacyStats(t *testing.T) {
+	svc := Service{Telemetry: &ServiceTelemetry{
+		Traffic:       &TrafficTelemetry{State: ObservationOK, TxBytes: uint64ptr(7), RxBytes: uint64ptr(9)},
+		OnlineClients: &CountTelemetry{State: ObservationOK, Value: uint64ptr(0)},
+	}}
+	svc.PopulateLegacyStats()
+	if svc.Stats == nil || svc.Stats.Tx != 7 || svc.Stats.Rx != 9 || svc.Stats.OnlineClients != 0 {
+		t.Fatalf("legacy stats = %+v", svc.Stats)
+	}
+}

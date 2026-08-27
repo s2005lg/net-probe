@@ -40,6 +40,58 @@ type Stats struct {
 	OnlineClients uint64 `json:"online_clients"`
 }
 
+type CapabilitySupport string
+
+const (
+	CapabilitySupported   CapabilitySupport = "supported"
+	CapabilityUnsupported CapabilitySupport = "unsupported"
+	CapabilityUnknown     CapabilitySupport = "unknown"
+)
+
+type MetricCapability struct {
+	Support    CapabilitySupport `json:"support"`
+	Source     string            `json:"source,omitempty"`
+	ReasonCode string            `json:"reason_code,omitempty"`
+}
+
+type ServiceCapabilities struct {
+	Traffic       MetricCapability `json:"traffic"`
+	OnlineClients MetricCapability `json:"online_clients"`
+}
+
+type ObservationState string
+
+const (
+	ObservationOK            ObservationState = "ok"
+	ObservationNotConfigured ObservationState = "not_configured"
+	ObservationDisabled      ObservationState = "disabled"
+	ObservationError         ObservationState = "error"
+)
+
+type TrafficTelemetry struct {
+	State     ObservationState `json:"state"`
+	TxBytes   *uint64          `json:"tx_bytes,omitempty"`
+	RxBytes   *uint64          `json:"rx_bytes,omitempty"`
+	ErrorCode string           `json:"error_code,omitempty"`
+}
+
+type CountTelemetry struct {
+	State     ObservationState `json:"state"`
+	Value     *uint64          `json:"value,omitempty"`
+	ErrorCode string           `json:"error_code,omitempty"`
+}
+
+type ServiceTelemetry struct {
+	Traffic       *TrafficTelemetry `json:"traffic,omitempty"`
+	OnlineClients *CountTelemetry   `json:"online_clients,omitempty"`
+}
+
+type ProtocolInfo struct {
+	State  string   `json:"state"`
+	Items  []string `json:"items"`
+	Source string   `json:"source,omitempty"`
+}
+
 type Service struct {
 	Type      string   `json:"type"`
 	Runtime   string   `json:"runtime"`
@@ -54,8 +106,38 @@ type Service struct {
 	ListenOK  bool     `json:"listen_ok"`
 	Cert      *Cert    `json:"cert,omitempty"`
 	Stats     *Stats   `json:"stats,omitempty"`
-	Status    string   `json:"status"`
-	Error     string   `json:"error,omitempty"`
+	Protocols     *ProtocolInfo         `json:"protocols,omitempty"`
+	Capabilities *ServiceCapabilities  `json:"capabilities,omitempty"`
+	Telemetry    *ServiceTelemetry      `json:"telemetry,omitempty"`
+	Status       string                 `json:"status"`
+	Error        string                 `json:"error,omitempty"`
+}
+
+// PopulateLegacyStats projects successful telemetry observations into the
+// legacy stats fields for consumers that do not understand the new contract.
+func (s *Service) PopulateLegacyStats() {
+	if s.Telemetry == nil {
+		return
+	}
+	stats := &Stats{}
+	succeeded := false
+	if traffic := s.Telemetry.Traffic; traffic != nil && traffic.State == ObservationOK {
+		if traffic.TxBytes != nil {
+			stats.Tx = *traffic.TxBytes
+			succeeded = true
+		}
+		if traffic.RxBytes != nil {
+			stats.Rx = *traffic.RxBytes
+			succeeded = true
+		}
+	}
+	if clients := s.Telemetry.OnlineClients; clients != nil && clients.State == ObservationOK && clients.Value != nil {
+		stats.OnlineClients = *clients.Value
+		succeeded = true
+	}
+	if succeeded {
+		s.Stats = stats
+	}
 }
 
 type Report struct {
