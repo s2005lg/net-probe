@@ -39,7 +39,7 @@ func Detect(ctx context.Context, reg *Registry, cfg config.DetectConfig, statsCf
 		matched[unit] = true
 		info, err := ShowUnit(ctx, deps.Runner, unit)
 		if err != nil {
-			out = append(out, report.Service{Type: tmpl.ID, Runtime: "systemd", Unit: unit, Capabilities: &capabilities, Status: "error", Error: err.Error()})
+			out = append(out, report.Service{Type: tmpl.ID, Runtime: "systemd", Unit: unit, Capabilities: &capabilities, Telemetry: commandFailedTelemetry(capabilities), Status: "error", Error: err.Error()})
 			continue
 		}
 		svc := report.Service{
@@ -114,6 +114,20 @@ func disabledTelemetry(capabilities report.ServiceCapabilities) *report.ServiceT
 
 func notConfiguredTelemetry(capabilities report.ServiceCapabilities) *report.ServiceTelemetry {
 	return telemetryWithState(capabilities, report.ObservationNotConfigured)
+}
+
+func commandFailedTelemetry(capabilities report.ServiceCapabilities) *report.ServiceTelemetry {
+	telemetry := &report.ServiceTelemetry{}
+	if capabilities.Traffic.Support == report.CapabilitySupported {
+		telemetry.Traffic = &report.TrafficTelemetry{State: report.ObservationError, ErrorCode: "command_failed"}
+	}
+	if capabilities.OnlineClients.Support == report.CapabilitySupported {
+		telemetry.OnlineClients = &report.CountTelemetry{State: report.ObservationError, ErrorCode: "command_failed"}
+	}
+	if telemetry.Traffic == nil && telemetry.OnlineClients == nil {
+		return nil
+	}
+	return telemetry
 }
 
 func telemetryWithState(capabilities report.ServiceCapabilities, state report.ObservationState) *report.ServiceTelemetry {

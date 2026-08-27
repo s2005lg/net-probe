@@ -49,6 +49,37 @@ func TestDetectCapabilitiesForAnyTLSHaveNoTelemetry(t *testing.T) {
 	}
 }
 
+func TestDetectCapabilitiesShowUnitFailureHasSafeSupportedObservations(t *testing.T) {
+	reg, err := NewRegistry([]Template{{ID: "xray", Units: []string{"xray"}, StatsKind: "xray"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := scriptedRunner{responses: map[string]runnerResponse{
+		"systemctl list-unit-files --type=service --no-legend --no-pager":                               {out: "xray.service enabled\n"},
+		"systemctl show xray --property=ActiveState,SubState,UnitFileState,NRestarts,MainPID,ExecStart": {err: errors.New("systemctl unavailable")},
+	}}
+	svcs, err := Detect(context.Background(), reg, config.DetectConfig{}, config.StatsConfig{}, Deps{Runner: runner, ProcRoot: "/nonexistent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(svcs) != 1 {
+		t.Fatalf("services = %+v", svcs)
+	}
+	svc := svcs[0]
+	if svc.Status != "error" || svc.Error != "systemctl unavailable" {
+		t.Fatalf("status=%q error=%q", svc.Status, svc.Error)
+	}
+	if svc.Capabilities == nil || svc.Capabilities.Traffic.Support != report.CapabilitySupported || svc.Capabilities.OnlineClients.Support != report.CapabilitySupported {
+		t.Fatalf("capabilities = %+v", svc.Capabilities)
+	}
+	if svc.Telemetry == nil || svc.Telemetry.Traffic == nil || svc.Telemetry.OnlineClients == nil {
+		t.Fatalf("telemetry = %+v", svc.Telemetry)
+	}
+	if svc.Telemetry.Traffic.State != report.ObservationError || svc.Telemetry.Traffic.ErrorCode != "command_failed" || svc.Telemetry.OnlineClients.State != report.ObservationError || svc.Telemetry.OnlineClients.ErrorCode != "command_failed" {
+		t.Fatalf("telemetry = %+v", svc.Telemetry)
+	}
+}
+
 func TestDetectCapabilitiesXrayWithoutEndpointAreNotConfigured(t *testing.T) {
 	reg, err := NewRegistry([]Template{{ID: "xray", Units: []string{"xray"}, StatsKind: "xray"}})
 	if err != nil {
