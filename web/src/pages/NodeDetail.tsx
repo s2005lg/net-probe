@@ -14,7 +14,7 @@ import {
 } from "recharts";
 import StatusBadge from "../components/StatusBadge";
 import ServiceCard from "../components/ServiceCard";
-import { api, nodeName, type Alert, type Metric, type Node, type Service } from "../lib/api";
+import { api, nodeName, type Alert, type Metric, type Node } from "../lib/api";
 import {
   formatBytes,
   formatClock,
@@ -23,6 +23,13 @@ import {
   formatTime,
   formatUptime,
 } from "../lib/format";
+import { aggregateTraffic, type TrafficPoint } from "../lib/traffic";
+
+const EMPTY_LABELS = {
+  all_unsupported: "当前服务不提供流量指标",
+  capabilities_unknown: "能力未知，请升级探针",
+  no_valid_data: "暂无有效采集数据",
+} as const;
 
 export default function NodeDetailPage() {
   const { id = "" } = useParams();
@@ -66,24 +73,7 @@ export default function NodeDetailPage() {
   if (!node) return <p className="text-muted">加载中…</p>;
 
   const { host } = node;
-  const trafficData = metrics
-    .map((metric) => {
-      let tx = 0;
-      let rx = 0;
-      if (metric.services_json) {
-        try {
-          const services = JSON.parse(metric.services_json) as Service[];
-          for (const service of services) {
-            tx += service.stats?.tx ?? 0;
-            rx += service.stats?.rx ?? 0;
-          }
-        } catch {
-          // Ignore malformed services_json rows.
-        }
-      }
-      return { ts: metric.ts, tx, rx };
-    })
-    .filter((point) => point.tx > 0 || point.rx > 0);
+  const trafficSummary = aggregateTraffic(metrics);
 
   const rangeLabel =
     metrics.length > 0
@@ -143,11 +133,11 @@ export default function NodeDetailPage() {
 
       <section className="rounded border border-edge bg-panel p-4">
         <h2 className="mb-3 font-head text-fg">流量趋势</h2>
-        {trafficData.length === 0 ? (
-          <p className="text-muted">暂无流量数据</p>
+        {trafficSummary.emptyState ? (
+          <p className="text-muted">{EMPTY_LABELS[trafficSummary.emptyState]}</p>
         ) : (
           <ResponsiveContainer width="100%" height={220}>
-            <AreaChart data={trafficData}>
+            <AreaChart data={trafficSummary.points}>
               <CartesianGrid stroke="var(--color-edge)" strokeDasharray="3 3" />
               <XAxis
                 dataKey="ts"
@@ -156,13 +146,10 @@ export default function NodeDetailPage() {
                 stroke="var(--color-muted)"
               />
               <YAxis stroke="var(--color-muted)" />
-              <Tooltip
-                labelFormatter={(v) => formatTime(Number(v))}
-                formatter={(value, name) => [`${formatBytes(Number(value))}`, name]}
-              />
+              <Tooltip content={<TrafficTooltip />} />
               <Legend />
-              <Area type="monotone" dataKey="rx" name="下行" stroke="var(--color-ok)" fill="var(--color-ok)" fillOpacity={0.25} />
-              <Area type="monotone" dataKey="tx" name="上行" stroke="var(--color-warn)" fill="var(--color-warn)" fillOpacity={0.25} />
+              <Area type="monotone" dataKey="rx" name="下行" stroke="var(--color-ok)" fill="var(--color-ok)" fillOpacity={0.25} connectNulls={false} />
+              <Area type="monotone" dataKey="tx" name="上行" stroke="var(--color-warn)" fill="var(--color-warn)" fillOpacity={0.25} connectNulls={false} />
             </AreaChart>
           </ResponsiveContainer>
         )}
@@ -244,6 +231,32 @@ export default function NodeDetailPage() {
           </div>
         )}
       </section>
+    </div>
+  );
+}
+
+function TrafficTooltip({
+  active,
+  label,
+  payload,
+}: {
+  active?: boolean;
+  label?: number | string;
+  payload?: Array<{ payload?: TrafficPoint }>;
+}) {
+  const point = payload?.[0]?.payload;
+  if (!active || !point) return null;
+
+  return (
+    <div className="rounded border border-edge bg-panel px-3 py-2 text-sm shadow-sm">
+      <div className="text-xs text-muted">{formatTime(Number(label))}</div>
+      <div className="mt-1 text-fg">下行：{point.rx === null ? "—" : formatBytes(point.rx)}</div>
+      <div className="text-fg">上行：{point.tx === null ? "—" : formatBytes(point.tx)}</div>
+      {point.partial && (
+        <div className="mt-1 text-xs text-muted">
+          {point.successful}/{point.eligible} 个可采集服务
+        </div>
+      )}
     </div>
   );
 }
