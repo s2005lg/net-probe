@@ -2,12 +2,15 @@ package detect
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/s2005lg/net-probe/internal/report"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -16,89 +19,104 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
 
-func TestHysteria2Stats(t *testing.T) {
+func withRoundTripper(t *testing.T, fn roundTripFunc) {
+	t.Helper()
 	old := http.DefaultTransport
-	defer func() { http.DefaultTransport = old }()
-	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		body := ""
-		switch req.URL.Path {
-		case "/traffic":
-			body = `{"u1":{"tx":100,"rx":50},"u2":{"tx":300,"rx":150}}`
-		case "/online":
-			body = `{"u1":2,"u2":1}`
+	http.DefaultTransport = fn
+	t.Cleanup(func() { http.DefaultTransport = old })
+}
+
+func jsonResponse(status int, body string) *http.Response {
+	return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}
+}
+
+func TestHysteria2TelemetryKeepsTrafficWhenOnlineFails(t *testing.T) {
+	withRoundTripper(t, func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path == "/traffic" {
+			return jsonResponse(http.StatusOK, `{"u":{"tx":0,"rx":0}}`), nil
 		}
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Header:     make(http.Header),
-			Body:       io.NopCloser(strings.NewReader(body)),
-		}, nil
+		return jsonResponse(http.StatusUnauthorized, `denied`), nil
 	})
-	s, err := CollectStats(context.Background(), "hysteria2", "http://unused", "")
-	if err != nil {
-		t.Fatal(err)
+	result := CollectTelemetryWithRunner(context.Background(), "hysteria2", "http://unused", "", fakeRunner{})
+	got := result.Telemetry
+	if got.Traffic.State != report.ObservationOK || *got.Traffic.TxBytes != 0 || *got.Traffic.RxBytes != 0 {
+		t.Fatalf("traffic = %+v", got.Traffic)
 	}
-	if s.Tx != 400 || s.Rx != 200 || s.OnlineClients != 3 {
-		t.Fatalf("stats = %+v", s)
+	if got.OnlineClients.State != report.ObservationError || got.OnlineClients.ErrorCode != "unauthorized" {
+		t.Fatalf("online = %+v", got.OnlineClients)
 	}
+	if len(result.Diagnostics) != 1 || result.Diagnostics[0].Metric != "online_clients" || result.Diagnostics[0].Err == nil {
+		t.Fatalf("diagnostics = %+v", result.Diagnostics)
+	}
+}
+
+func TestHysteria2TelemetryKeepsOnlineWhenTrafficFails(t *testing.T) {
+	withRoundTripper(t, func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path == "/traffic" {
+			return nil, errors.New("connection reset")
+		}
+		return jsonResponse(http.StatusOK, `{"u":0}`), nil
+	})
+	result := CollectTelemetryWithRunner(context.Background(), "hysteria2", "http://unused", "", fakeRunner{})
+	got := result.Telemetry
+	if got.Traffic.State != report.ObservationError || got.Traffic.ErrorCode != "connection_failed" {
+		t.Fatalf("traffic = %+v", got.Traffic)
+	}
+	if got.OnlineClients.State != report.ObservationOK || got.OnlineClients.Value == nil || *got.OnlineClients.Value != 0 {
+		t.Fatalf("online = %+v", got.OnlineClients)
+	}
+}
+
+func TestSingBoxTelemetryHasNoOnlineObservation(t *testing.T) {
+	withRoundTripper(t, func(*http.Request) (*http.Response, error) {
+		return jsonResponse(http.StatusOK, `{"up":7,"down":9}`), nil
+	})
+	result := CollectTelemetryWithRunner(context.Background(), "sing-box", "http://unused", "", fakeRunner{})
+	got := result.Telemetry
+	if got.Traffic.State != report.ObservationOK || got.OnlineClients != nil {
+		t.Fatalf("telemetry = %+v", got)
+	}
+}
+
+func TestXrayTelemetryKeepsOnlineWhenTrafficFails(t *testing.T) {
+	r := scriptedRunner{responses: map[string]runnerResponse{
+		"xray api stats query -s 127.0.0.1:8080":            {err: errors.New("stats unavailable")},
+		"xray api statsonlineiplist -s 127.0.0.1:8080 -all": {out: `{"users":[{"ips":[{"ip":"1.2.3.4"}]}]}`},
+	}}
+	result := CollectTelemetryWithRunner(context.Background(), "xray", "127.0.0.1:8080", "", r)
+	got := result.Telemetry
+	if got.Traffic.State != report.ObservationError || got.Traffic.ErrorCode != "command_failed" {
+		t.Fatalf("traffic = %+v", got.Traffic)
+	}
+	if got.OnlineClients.State != report.ObservationOK || got.OnlineClients.Value == nil || *got.OnlineClients.Value != 1 {
+		t.Fatalf("online = %+v", got.OnlineClients)
+	}
+}
+
+type runnerResponse struct {
+	out string
+	err error
+}
+
+type scriptedRunner struct{ responses map[string]runnerResponse }
+
+func (r scriptedRunner) Run(_ context.Context, name string, args ...string) (string, error) {
+	response := r.responses[name+" "+strings.Join(args, " ")]
+	return response.out, response.err
 }
 
 func TestHysteria2StatsNoScheme(t *testing.T) {
-	old := http.DefaultTransport
-	defer func() { http.DefaultTransport = old }()
-	var gotURL string
-	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		gotURL = req.URL.String()
-		body := ""
-		switch req.URL.Path {
-		case "/traffic":
-			body = `{"u1":{"tx":1,"rx":2}}`
-		case "/online":
-			body = `{}`
+	withRoundTripper(t, func(req *http.Request) (*http.Response, error) {
+		if !strings.Contains(req.URL.String(), "http://127.0.0.1:8080/") {
+			t.Fatalf("url = %q", req.URL.String())
 		}
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Header:     make(http.Header),
-			Body:       io.NopCloser(strings.NewReader(body)),
-		}, nil
+		if req.URL.Path == "/traffic" {
+			return jsonResponse(http.StatusOK, `{"u":{"tx":1,"rx":2}}`), nil
+		}
+		return jsonResponse(http.StatusOK, `{}`), nil
 	})
 	if _, err := CollectStats(context.Background(), "hysteria2", "127.0.0.1:8080", ""); err != nil {
 		t.Fatal(err)
-	}
-	if !strings.Contains(gotURL, "http://127.0.0.1:8080/") {
-		t.Fatalf("url = %q", gotURL)
-	}
-}
-
-func TestSingBoxStats(t *testing.T) {
-	old := http.DefaultTransport
-	defer func() { http.DefaultTransport = old }()
-	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Header:     make(http.Header),
-			Body:       io.NopCloser(strings.NewReader(`{"up":700,"down":300}`)),
-		}, nil
-	})
-	s, err := CollectStats(context.Background(), "sing-box", "http://unused", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s.Tx != 700 || s.Rx != 300 {
-		t.Fatalf("stats = %+v", s)
-	}
-}
-
-func TestXrayStats(t *testing.T) {
-	r := fakeRunner{out: map[string]string{
-		"xray api stats query -s 127.0.0.1:8080":            "user>>>u1>>>traffic>>>uplink 700\nuser>>>u1>>>traffic>>>downlink 300\n",
-		"xray api statsonlineiplist -s 127.0.0.1:8080 -all": `{"users":[{"email":"u1","ips":[{"ip":"1.2.3.4","last_seen":1},{"ip":"5.6.7.8","last_seen":2}]},{"email":"u2","ips":[{"ip":"9.10.11.12","last_seen":3}]}]}`,
-	}}
-	s, err := xrayStats(context.Background(), r, "127.0.0.1:8080")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if s.Tx != 700 || s.Rx != 300 || s.OnlineClients != 3 {
-		t.Fatalf("stats = %+v", s)
 	}
 }
 
