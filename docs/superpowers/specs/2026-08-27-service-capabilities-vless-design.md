@@ -221,6 +221,8 @@ Raw endpoint URLs, authorization headers, secrets, command output, and configura
 
 An unsupported capability has no telemetry observation. A supported capability always has an observation for the current run, including `not_configured`, `disabled`, or `error`.
 
+Legacy `service.stats` is a deliberately lossy compatibility projection (option A). When a complete successful metric observation is available, the Agent may create or update legacy numeric fields and the other legacy fields may remain ambiguous zeroes because that shape cannot represent missing values. Telemetry is authoritative; Panel code must ignore legacy stats whenever telemetry exists and must never fall back to legacy stats for a metric covered by telemetry.
+
 ### 7.4 Complete examples
 
 AnyTLS with no native metric source:

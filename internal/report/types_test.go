@@ -95,3 +95,71 @@ func TestPopulateLegacyStats(t *testing.T) {
 		t.Fatalf("legacy stats = %+v", svc.Stats)
 	}
 }
+
+func TestPopulateLegacyStatsTrafficOnly(t *testing.T) {
+	svc := Service{Telemetry: &ServiceTelemetry{
+		Traffic: &TrafficTelemetry{State: ObservationOK, TxBytes: uint64ptr(7), RxBytes: uint64ptr(9)},
+	}}
+	svc.PopulateLegacyStats()
+	if svc.Stats == nil || svc.Stats.Tx != 7 || svc.Stats.Rx != 9 || svc.Stats.OnlineClients != 0 {
+		t.Fatalf("legacy stats = %+v", svc.Stats)
+	}
+}
+
+func TestPopulateLegacyStatsOnlineOnly(t *testing.T) {
+	svc := Service{Telemetry: &ServiceTelemetry{
+		OnlineClients: &CountTelemetry{State: ObservationOK, Value: uint64ptr(3)},
+	}}
+	svc.PopulateLegacyStats()
+	if svc.Stats == nil || svc.Stats.Tx != 0 || svc.Stats.Rx != 0 || svc.Stats.OnlineClients != 3 {
+		t.Fatalf("legacy stats = %+v", svc.Stats)
+	}
+}
+
+func TestPopulateLegacyStatsRequiresCompleteObservations(t *testing.T) {
+	original := &Stats{Tx: 11, Rx: 12, OnlineClients: 13}
+	svc := Service{Stats: original, Telemetry: &ServiceTelemetry{
+		Traffic:       &TrafficTelemetry{State: ObservationOK, TxBytes: uint64ptr(7)},
+		OnlineClients: &CountTelemetry{State: ObservationOK},
+	}}
+	svc.PopulateLegacyStats()
+	if svc.Stats != original {
+		t.Fatalf("incomplete observations changed legacy stats: %+v", svc.Stats)
+	}
+}
+
+func TestPopulateLegacyStatsIgnoresErrorObservation(t *testing.T) {
+	original := &Stats{Tx: 11, Rx: 12, OnlineClients: 13}
+	svc := Service{Stats: original, Telemetry: &ServiceTelemetry{
+		Traffic:       &TrafficTelemetry{State: ObservationError, TxBytes: uint64ptr(7), RxBytes: uint64ptr(9)},
+		OnlineClients: &CountTelemetry{State: ObservationError, Value: uint64ptr(3)},
+	}}
+	svc.PopulateLegacyStats()
+	if svc.Stats != original {
+		t.Fatalf("error observations changed legacy stats: %+v", svc.Stats)
+	}
+}
+
+func TestPopulateLegacyStatsPreservesExistingStatsWhenNoValidObservation(t *testing.T) {
+	original := &Stats{Tx: 11, Rx: 12, OnlineClients: 13}
+	svc := Service{Stats: original, Telemetry: &ServiceTelemetry{
+		Traffic:       &TrafficTelemetry{State: ObservationOK, RxBytes: uint64ptr(9)},
+		OnlineClients: &CountTelemetry{State: ObservationOK},
+	}}
+	svc.PopulateLegacyStats()
+	if svc.Stats != original {
+		t.Fatalf("missing pointers changed legacy stats: %+v", svc.Stats)
+	}
+}
+
+func TestPopulateLegacyStatsUpdatesOnlyValidExistingFields(t *testing.T) {
+	original := &Stats{Tx: 11, Rx: 12, OnlineClients: 13}
+	svc := Service{Stats: original, Telemetry: &ServiceTelemetry{
+		Traffic:       &TrafficTelemetry{State: ObservationOK, TxBytes: uint64ptr(7), RxBytes: uint64ptr(9)},
+		OnlineClients: &CountTelemetry{State: ObservationError, Value: uint64ptr(3)},
+	}}
+	svc.PopulateLegacyStats()
+	if svc.Stats.Tx != 7 || svc.Stats.Rx != 9 || svc.Stats.OnlineClients != 13 {
+		t.Fatalf("legacy stats = %+v", svc.Stats)
+	}
+}

@@ -119,14 +119,14 @@ func (s *Service) PopulateLegacyStats() {
 	if s.Telemetry == nil {
 		return
 	}
-	stats := &Stats{}
+	var stats Stats
+	if s.Stats != nil {
+		stats = *s.Stats
+	}
 	succeeded := false
 	if traffic := s.Telemetry.Traffic; traffic != nil && traffic.State == ObservationOK {
-		if traffic.TxBytes != nil {
+		if traffic.TxBytes != nil && traffic.RxBytes != nil {
 			stats.Tx = *traffic.TxBytes
-			succeeded = true
-		}
-		if traffic.RxBytes != nil {
 			stats.Rx = *traffic.RxBytes
 			succeeded = true
 		}
@@ -136,7 +136,7 @@ func (s *Service) PopulateLegacyStats() {
 		succeeded = true
 	}
 	if succeeded {
-		s.Stats = stats
+		s.Stats = &stats
 	}
 }
 

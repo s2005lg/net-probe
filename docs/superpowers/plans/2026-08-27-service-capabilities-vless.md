@@ -12,6 +12,7 @@
 
 - Keep `schema_version: "1"`; all report-contract changes are additive.
 - Continue emitting legacy `service.stats` for old Panels until a future schema version removes it.
+- Option A governs legacy compatibility: `service.stats` is a deliberately lossy projection and may contain ambiguous zeroes. Telemetry is authoritative; new Panel code must never fall back to legacy stats whenever telemetry exists.
 - New Panels must accept v0.1.0 reports without capability, telemetry, or protocol fields.
 - Statistics remain service-instance aggregates; do not add per-inbound, per-protocol, or per-user metrics.
 - Do not estimate traffic or online clients from NIC counters, sockets, firewall counters, cgroups, or eBPF.
@@ -181,7 +182,7 @@ type ProtocolInfo struct {
 }
 ```
 
-Extend `Service` with optional `Protocols`, `Capabilities`, and `Telemetry` pointers. Implement `PopulateLegacyStats` so it copies only successful observations, creates `Stats` when at least one observation succeeded, and never converts an error or missing observation to a fabricated value.
+Extend `Service` with optional `Protocols`, `Capabilities`, and `Telemetry` pointers. Implement `PopulateLegacyStats` as the deliberately lossy option-A compatibility projection: traffic is valid only when both byte pointers are present in an `ok` observation, online clients is valid only when its value pointer is present in an `ok` observation, valid observations may create/update legacy stats, and invalid/error/missing observations must not overwrite their corresponding existing legacy fields. Telemetry remains authoritative for new Panel code.
 
 - [ ] **Step 4: Run report tests**
 
