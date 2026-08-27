@@ -13,6 +13,7 @@ import {
   YAxis,
 } from "recharts";
 import StatusBadge from "../components/StatusBadge";
+import ServiceCard from "../components/ServiceCard";
 import { api, nodeName, type Alert, type Metric, type Node, type Service } from "../lib/api";
 import {
   formatBytes,
@@ -116,22 +117,7 @@ export default function NodeDetailPage() {
         ) : (
           <div className="grid gap-3 md:grid-cols-2">
             {node.services.filter((s) => s.type !== "generic").map((s, i) => (
-              <div key={`${s.type}-${i}`} className="rounded border border-edge bg-surface p-3">
-                <div className="flex items-center justify-between">
-                  <span className="font-medium text-fg">{s.type}</span>
-                  <StatusBadge status={s.status || (s.active ? "online" : "offline")} />
-                </div>
-                <dl className="mt-2 space-y-1 text-sm text-muted">
-                  <Row label="版本" value={s.version || "—"} />
-                  <Row label="端口" value={s.listen.map((l) => l.port).join(", ") || "—"} />
-                  <Row label="证书" value={s.cert ? `${s.cert.days_left} 天` : "—"} />
-                  <Row
-                    label="流量"
-                    value={s.stats ? `↓${formatBytes(s.stats.rx)} ↑${formatBytes(s.stats.tx)}` : "—"}
-                  />
-                  <Row label="在线连接" value={s.stats?.online_clients?.toString() ?? "—"} />
-                </dl>
-              </div>
+              <ServiceCard key={`${s.type}-${s.unit ?? ""}-${i}`} service={s} />
             ))}
           </div>
         )}
@@ -267,15 +253,6 @@ function InfoCard({ label, value }: { label: string; value: string }) {
     <div className="rounded border border-edge bg-panel p-3">
       <div className="text-xs text-muted">{label}</div>
       <div className="mt-1 truncate text-sm text-fg">{value || "—"}</div>
-    </div>
-  );
-}
-
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex justify-between">
-      <dt>{label}</dt>
-      <dd className="text-fg">{value}</dd>
     </div>
   );
 }
