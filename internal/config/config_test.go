@@ -73,3 +73,26 @@ secret = "s3cret"
 		t.Fatalf("stats = %+v", cfg.Stats.Services)
 	}
 }
+
+func TestStatsServiceCanBeDisabled(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	content := `[agent]
+node_id = "n1"
+[[sink]]
+type = "panel"
+url = "https://panel.example"
+[stats.services.xray]
+enabled = false
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Stats.Services["xray"].Enabled == nil || *cfg.Stats.Services["xray"].Enabled {
+		t.Fatalf("enabled = %#v", cfg.Stats.Services["xray"].Enabled)
+	}
+}

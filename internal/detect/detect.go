@@ -13,6 +13,7 @@ import (
 type Deps struct {
 	Runner   Runner
 	ProcRoot string
+	Logf     func(format string, args ...any)
 }
 
 const certWarnDays = 30
@@ -34,22 +35,24 @@ func Detect(ctx context.Context, reg *Registry, cfg config.DetectConfig, statsCf
 		if !ok {
 			continue
 		}
+		capabilities := CapabilitiesFor(tmpl.ID)
 		matched[unit] = true
 		info, err := ShowUnit(ctx, deps.Runner, unit)
 		if err != nil {
-			out = append(out, report.Service{Type: tmpl.ID, Runtime: "systemd", Unit: unit, Status: "error", Error: err.Error()})
+			out = append(out, report.Service{Type: tmpl.ID, Runtime: "systemd", Unit: unit, Capabilities: &capabilities, Status: "error", Error: err.Error()})
 			continue
 		}
 		svc := report.Service{
-			Type:      tmpl.ID,
-			Runtime:   "systemd",
-			Unit:      unit,
-			Binary:    info.ExecStart,
-			Active:    info.Active,
-			Enabled:   info.Enabled,
-			MainPID:   info.MainPID,
-			NRestarts: info.NRestarts,
-			Status:    "ok",
+			Type:         tmpl.ID,
+			Runtime:      "systemd",
+			Unit:         unit,
+			Binary:       info.ExecStart,
+			Active:       info.Active,
+			Enabled:      info.Enabled,
+			MainPID:      info.MainPID,
+			NRestarts:    info.NRestarts,
+			Capabilities: &capabilities,
+			Status:       "ok",
 		}
 		if info.ExecStart != "" {
 			if v, err := Version(ctx, deps.Runner, info.ExecStart, tmpl.VersionCmd); err == nil {
@@ -74,16 +77,54 @@ func Detect(ctx context.Context, reg *Registry, cfg config.DetectConfig, statsCf
 			}
 		}
 		if tmpl.StatsKind != "" {
-			if endpoint, secret, ok := statsEndpointFor(tmpl, statsCfg); ok {
-				if st, err := CollectStatsWithRunner(ctx, tmpl.StatsKind, endpoint, secret, deps.Runner); err == nil {
-					svc.Stats = st
+			if statsDisabled(tmpl, statsCfg) {
+				svc.Telemetry = disabledTelemetry(capabilities)
+			} else {
+				endpoint, secret, ok := statsEndpointFor(tmpl, statsCfg)
+				if !ok {
+					svc.Telemetry = notConfiguredTelemetry(capabilities)
+				} else {
+					result := CollectTelemetryWithRunner(ctx, tmpl.StatsKind, endpoint, secret, deps.Runner)
+					svc.Telemetry = result.Telemetry
+					for _, diagnostic := range result.Diagnostics {
+						if deps.Logf != nil {
+							deps.Logf("service %s telemetry %s: %v", tmpl.ID, diagnostic.Metric, diagnostic.Err)
+						}
+					}
 				}
+			}
+			if svc.Telemetry != nil {
+				svc.PopulateLegacyStats()
 			}
 		}
 		svc.Status, svc.Error = classifyServiceStatus(svc.Active, svc.Cert, len(tmpl.ListenPorts) > 0, svc.ListenOK)
 		out = append(out, svc)
 	}
 	return out, nil
+}
+
+func statsDisabled(tmpl Template, statsCfg config.StatsConfig) bool {
+	service, ok := statsCfg.Services[tmpl.StatsKind]
+	return ok && service.Enabled != nil && !*service.Enabled
+}
+
+func disabledTelemetry(capabilities report.ServiceCapabilities) *report.ServiceTelemetry {
+	return telemetryWithState(capabilities, report.ObservationDisabled)
+}
+
+func notConfiguredTelemetry(capabilities report.ServiceCapabilities) *report.ServiceTelemetry {
+	return telemetryWithState(capabilities, report.ObservationNotConfigured)
+}
+
+func telemetryWithState(capabilities report.ServiceCapabilities, state report.ObservationState) *report.ServiceTelemetry {
+	telemetry := &report.ServiceTelemetry{}
+	if capabilities.Traffic.Support == report.CapabilitySupported {
+		telemetry.Traffic = &report.TrafficTelemetry{State: state}
+	}
+	if capabilities.OnlineClients.Support == report.CapabilitySupported {
+		telemetry.OnlineClients = &report.CountTelemetry{State: state}
+	}
+	return telemetry
 }
 
 func classifyServiceStatus(active bool, cert *report.Cert, hasDeclaredPorts, listenOK bool) (status, errMsg string) {

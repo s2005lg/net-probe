@@ -2,6 +2,9 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -60,4 +63,50 @@ func TestPersistedNodeID(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(ConfigDir(), "node-id")); err != nil {
 		t.Fatalf("node-id file missing: %v", err)
 	}
+}
+
+func TestBuildLogsTelemetryDiagnosticsLocallyWithoutLeakingThem(t *testing.T) {
+	cfg := config.Default()
+	cfg.Detect.CustomDir = t.TempDir()
+	cfg.Stats.Services = map[string]config.StatsService{
+		"xray": {Endpoint: "127.0.0.1:10085"},
+	}
+	runner := diagnosticRunner{responses: map[string]runnerResult{
+		"systemctl list-unit-files --type=service --no-legend --no-pager":                               {out: "xray.service enabled\n"},
+		"systemctl show xray --property=ActiveState,SubState,UnitFileState,NRestarts,MainPID,ExecStart": {out: "ActiveState=active\nUnitFileState=enabled\nMainPID=10"},
+		"xray api stats query -s 127.0.0.1:10085":                                                       {err: errors.New("controlled statistics failure")},
+		"xray api statsonlineiplist -s 127.0.0.1:10085 -all":                                            {err: errors.New("controlled statistics failure")},
+	}}
+	var logs []string
+	rep, err := build(context.Background(), cfg, "0.1.0", runner, func(format string, args ...any) {
+		logs = append(logs, strings.TrimSpace(fmt.Sprintf(format, args...)))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(logs) == 0 || !strings.Contains(strings.Join(logs, "\n"), "controlled statistics failure") {
+		t.Fatalf("logs = %q", logs)
+	}
+	body, err := json.Marshal(rep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "controlled statistics failure") {
+		t.Fatalf("report leaked diagnostic: %s", body)
+	}
+	if !strings.Contains(string(body), `"error_code":"command_failed"`) {
+		t.Fatalf("report missing safe error code: %s", body)
+	}
+}
+
+type runnerResult struct {
+	out string
+	err error
+}
+
+type diagnosticRunner struct{ responses map[string]runnerResult }
+
+func (r diagnosticRunner) Run(_ context.Context, name string, args ...string) (string, error) {
+	result := r.responses[name+" "+strings.Join(args, " ")]
+	return result.out, result.err
 }

@@ -67,6 +67,10 @@ func allTemplates(cfg *config.Config) ([]detect.Template, error) {
 }
 
 func Build(ctx context.Context, cfg *config.Config, version string, runner detect.Runner) (*report.Report, error) {
+	return build(ctx, cfg, version, runner, nil)
+}
+
+func build(ctx context.Context, cfg *config.Config, version string, runner detect.Runner, logf func(string, ...any)) (*report.Report, error) {
 	tmpls, err := allTemplates(cfg)
 	if err != nil {
 		return nil, err
@@ -75,7 +79,7 @@ func Build(ctx context.Context, cfg *config.Config, version string, runner detec
 	if err != nil {
 		return nil, err
 	}
-	svcs, err := detect.Detect(ctx, reg, cfg.Detect, cfg.Stats, detect.Deps{Runner: runner, ProcRoot: "/proc"})
+	svcs, err := detect.Detect(ctx, reg, cfg.Detect, cfg.Stats, detect.Deps{Runner: runner, ProcRoot: "/proc", Logf: logf})
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +100,7 @@ func Build(ctx context.Context, cfg *config.Config, version string, runner detec
 func Run(ctx context.Context, cfg *config.Config, version string, runner detect.Runner) int {
 	logger := logx.New(cfg.Agent.LogLevel)
 	start := time.Now()
-	rep, err := Build(ctx, cfg, version, runner)
+	rep, err := build(ctx, cfg, version, runner, logger.Debugf)
 	if err != nil {
 		logger.Errorf("build report: %v", err)
 		return 2

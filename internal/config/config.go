@@ -36,6 +36,7 @@ type DetectConfig struct {
 }
 
 type StatsService struct {
+	Enabled  *bool  `toml:"enabled"`
 	Endpoint string `toml:"endpoint"`
 	Secret   string `toml:"secret"`
 }
