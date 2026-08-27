@@ -38,6 +38,57 @@ export interface ServiceStats {
   online_clients?: number;
 }
 
+export type ProtocolState = "ok" | "unknown" | "error";
+export type CapabilitySupport = "supported" | "unsupported" | "unknown";
+export type CapabilityReasonCode =
+  | "native_api_unavailable"
+  | "collector_not_implemented"
+  | "agent_too_old";
+export type ObservationState = "ok" | "not_configured" | "disabled" | "error";
+export type TelemetryErrorCode =
+  | "timeout"
+  | "unauthorized"
+  | "connection_failed"
+  | "invalid_response"
+  | "command_failed"
+  | "config_unreadable"
+  | "unknown";
+
+export interface ProtocolInfo {
+  state: ProtocolState;
+  items: string[];
+  source?: string;
+}
+
+export interface MetricCapability {
+  support: CapabilitySupport;
+  source?: string;
+  reason_code?: CapabilityReasonCode;
+}
+
+export interface ServiceCapabilities {
+  traffic: MetricCapability;
+  online_clients: MetricCapability;
+}
+
+export interface TrafficTelemetry {
+  state: ObservationState;
+  tx_bytes?: number;
+  rx_bytes?: number;
+  error_code?: TelemetryErrorCode;
+}
+
+export interface CountTelemetry {
+  state: ObservationState;
+  value?: number;
+  error_code?: TelemetryErrorCode;
+}
+
+export interface ServiceTelemetry {
+  traffic?: TrafficTelemetry;
+  online_clients?: CountTelemetry;
+}
+
 export interface Service {
   type: string;
   runtime: string;
@@ -52,6 +103,9 @@ export interface Service {
   listen_ok: boolean;
   cert?: Cert | null;
   stats?: ServiceStats | null;
+  protocols?: ProtocolInfo | null;
+  capabilities?: ServiceCapabilities | null;
+  telemetry?: ServiceTelemetry | null;
   status: string;
   error?: string;
 }
