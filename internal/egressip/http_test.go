@@ -66,6 +66,21 @@ func TestDiscoverRejectsOversizedBody(t *testing.T) {
 	}
 }
 
+func TestDiscoverDoesNotExposeMalformedResponseBody(t *testing.T) {
+	const body = "distinct-malformed-provider-payload"
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return response(http.StatusOK, body), nil
+	})}
+
+	_, err := (Fetcher{Client: client}).Discover(context.Background(), IPv4, []string{"https://provider.test/ip"})
+	if err == nil {
+		t.Fatal("Discover() error = nil, want malformed response rejection")
+	}
+	if strings.Contains(err.Error(), body) {
+		t.Fatalf("Discover() error exposed response body: %v", err)
+	}
+}
+
 func TestHTTPClientRejectsHTTPSDowngrade(t *testing.T) {
 	client := NewHTTPClient(time.Second)
 	var schemes []string

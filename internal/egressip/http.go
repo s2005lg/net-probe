@@ -81,7 +81,7 @@ func (f Fetcher) discoverEndpoint(ctx context.Context, family Family, endpoint s
 
 	addr, err := netip.ParseAddr(strings.TrimSpace(string(body)))
 	if err != nil {
-		return "", fmt.Errorf("response from %q is not an IP address: %w", endpoint, err)
+		return "", fmt.Errorf("response from %q is not an IP address", endpoint)
 	}
 	addr = addr.Unmap()
 	if !matchesFamily(addr, family) {
