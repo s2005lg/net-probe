@@ -74,6 +74,18 @@ func TestDiscoverProtocolsConfigResults(t *testing.T) {
 			t.Fatalf("protocols = %+v", got)
 		}
 	})
+
+	t.Run("explicit config overrides a valid fallback", func(t *testing.T) {
+		explicit := writeProtocolConfig(t, `{"inbounds":[{"protocol":"trojan"}]}`)
+		fallback := writeProtocolConfig(t, `{"inbounds":[{"protocol":"vless"}]}`)
+		got, err := DiscoverProtocols("xray", []string{"xray", "-config", explicit}, []string{fallback})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.State != "ok" || got.Source != "config" || len(got.Items) != 0 {
+			t.Fatalf("protocols = %+v", got)
+		}
+	})
 }
 
 func TestDiscoverProtocolsRecognizesConfigFlags(t *testing.T) {

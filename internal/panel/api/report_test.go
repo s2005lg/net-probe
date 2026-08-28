@@ -59,7 +59,7 @@ func TestHandleExtendedReport(t *testing.T) {
 	telemetry, _ := service["telemetry"].(map[string]any)
 	traffic, _ := telemetry["traffic"].(map[string]any)
 	onlineClients, _ := telemetry["online_clients"].(map[string]any)
-	if traffic["tx_bytes"] != float64(0) || traffic["rx_bytes"] != float64(0) || onlineClients["value"] != float64(0) {
+	if traffic["state"] != "ok" || onlineClients["state"] != "ok" || traffic["tx_bytes"] != float64(0) || traffic["rx_bytes"] != float64(0) || onlineClients["value"] != float64(0) {
 		t.Fatalf("telemetry=%v", telemetry)
 	}
 }

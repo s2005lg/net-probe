@@ -25,6 +25,38 @@ describe("service telemetry compatibility", () => {
     expect(normalizeTraffic(service)).toMatchObject({ kind: "ok", tx: 0, rx: 0 });
   });
 
+  it("preserves a successful zero online-client count", () => {
+    const service = fixture({
+      capabilities: { traffic: { support: "supported" }, online_clients: { support: "supported" } },
+      telemetry: { online_clients: { state: "ok", value: 0 } },
+    });
+
+    expect(normalizeOnlineClients(service)).toEqual({ kind: "ok", value: 0, legacy: false });
+  });
+
+  it("does not use legacy stats when telemetry omits a metric", () => {
+    const service = fixture({
+      stats: { tx: 7, rx: 9, online_clients: 3 },
+      capabilities: { traffic: { support: "supported" }, online_clients: { support: "supported" } },
+      telemetry: {},
+    });
+
+    expect(normalizeTraffic(service)).toEqual({ kind: "unknown" });
+    expect(normalizeOnlineClients(service)).toEqual({ kind: "unknown" });
+  });
+
+  it("normalizes collector-not-implemented capabilities", () => {
+    const service = fixture({
+      capabilities: {
+        traffic: { support: "unsupported", reason_code: "collector_not_implemented" },
+        online_clients: { support: "unsupported", reason_code: "collector_not_implemented" },
+      },
+    });
+
+    expect(normalizeTraffic(service)).toEqual({ kind: "not_implemented" });
+    expect(normalizeOnlineClients(service)).toEqual({ kind: "not_implemented" });
+  });
+
   it("labels native unavailability separately", () => {
     const service = fixture({
       capabilities: {

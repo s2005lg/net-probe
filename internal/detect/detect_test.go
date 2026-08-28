@@ -3,8 +3,10 @@ package detect
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/s2005lg/net-probe/internal/config"
@@ -52,6 +54,42 @@ func TestDetectXrayVLESSRemainsSingleService(t *testing.T) {
 	}
 	if svcs[0].Type != "xray" || svcs[0].Protocols == nil || svcs[0].Protocols.State != "ok" || !reflect.DeepEqual(svcs[0].Protocols.Items, []string{"vless"}) {
 		t.Fatalf("service = %+v", svcs[0])
+	}
+}
+
+func TestDetectProtocolDiscoveryFailureKeepsServiceAndLogsOriginalError(t *testing.T) {
+	missingConfig := filepath.Join(t.TempDir(), "missing.json")
+	reg, err := NewRegistry([]Template{{ID: "xray", Units: []string{"xray"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := scriptedRunner{responses: map[string]runnerResponse{
+		"systemctl list-unit-files --type=service --no-legend --no-pager": {out: "xray.service enabled\n"},
+		"systemctl show xray --property=ActiveState,SubState,UnitFileState,NRestarts,MainPID,ExecStart": {
+			out: "ActiveState=active\nUnitFileState=enabled\nMainPID=10\nExecStart={ path=/usr/bin/xray ; argv[]=/usr/bin/xray run -config " + missingConfig + " ; ignore_errors=no }",
+		},
+	}}
+	var loggedFormat string
+	var loggedArgs []any
+	svcs, err := Detect(context.Background(), reg, config.DetectConfig{}, config.StatsConfig{}, Deps{
+		Runner:   runner,
+		ProcRoot: "/nonexistent",
+		Logf: func(format string, args ...any) {
+			loggedFormat, loggedArgs = format, args
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(svcs) != 1 || svcs[0].Type != "xray" || svcs[0].Protocols == nil || svcs[0].Protocols.State != "error" {
+		t.Fatalf("services = %+v", svcs)
+	}
+	if loggedFormat != "service %s protocol discovery: %v" || len(loggedArgs) != 2 || loggedArgs[0] != "xray" {
+		t.Fatalf("log format=%q args=%#v", loggedFormat, loggedArgs)
+	}
+	loggedErr, ok := loggedArgs[1].(error)
+	if !ok || !errors.Is(loggedErr, fs.ErrNotExist) || !strings.Contains(loggedErr.Error(), missingConfig) {
+		t.Fatalf("logged error = %#v", loggedArgs[1])
 	}
 }
 

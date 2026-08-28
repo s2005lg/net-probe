@@ -49,7 +49,7 @@ function zeroHysteriaFixture(): Service {
       online_clients: { support: "supported" },
     },
     telemetry: {
-      traffic: { state: "ok", tx_bytes: 0, rx_bytes: 0 },
+      traffic: { state: "ok", tx_bytes: 1024, rx_bytes: 2048 },
       online_clients: { state: "ok", value: 0 },
     },
   });
@@ -71,8 +71,8 @@ describe("ServiceCard", () => {
     expect(html).toContain("内核不支持");
 
     const zero = renderToStaticMarkup(<ServiceCard service={zeroHysteriaFixture()} />);
-    expect(zero).toContain("↓0 B ↑0 B");
-    expect(zero).toContain("0");
+    expect(zero).toContain("↓2.0 KB ↑1.0 KB");
+    expect(zero).toContain('<dt>在线连接</dt><dd class="text-right text-fg">0</dd>');
   });
 
   it("uses a safe error code as supplementary metric detail", () => {
