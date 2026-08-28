@@ -1,6 +1,13 @@
 package config
 
-import "github.com/BurntSushi/toml"
+import (
+	"fmt"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/BurntSushi/toml"
+)
 
 type Config struct {
 	ListenAddr string `toml:"listen_addr"`
@@ -26,6 +33,10 @@ type Config struct {
 		WebhookURL     string `toml:"webhook_url"`
 	} `toml:"alert"`
 	Geo struct {
+		Provider        string `toml:"provider"`
+		URL             string `toml:"url"`
+		Timeout         string `toml:"timeout"`
+		TokenEnv        string `toml:"token_env"`
 		RefreshInterval string `toml:"refresh_interval"`
 	} `toml:"geo"`
 }
@@ -35,6 +46,9 @@ func Default() *Config {
 	c.Admin.User = "admin"
 	c.Retention.RawDays, c.Retention.HourlyDays, c.Retention.DailyDays = 7, 30, 365
 	c.Alert.CertExpiryDays, c.Alert.DiskUsagePct, c.Alert.MemUsagePct = 7, 85, 90
+	c.Geo.Provider = "ipwhois"
+	c.Geo.URL = "https://ipwho.is/{ip}?lang=zh-CN"
+	c.Geo.Timeout = "4s"
 	c.Geo.RefreshInterval = "12h"
 	return c
 }
@@ -45,4 +59,42 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+func (c *Config) Validate() error {
+	if c.Geo.Provider != "ipwhois" {
+		return fmt.Errorf("geo provider must be ipwhois")
+	}
+	if strings.Count(c.Geo.URL, "{ip}") != 1 {
+		return fmt.Errorf("geo url must contain exactly one {ip} placeholder")
+	}
+	u, err := url.Parse(c.Geo.URL)
+	if err != nil || u.Scheme == "" || u.Hostname() == "" {
+		return fmt.Errorf("geo url is invalid")
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "https" && !(scheme == "http" && isLocalHost(u.Hostname())) {
+		return fmt.Errorf("geo url must use https (or local http)")
+	}
+	if err := positiveDuration("geo timeout", c.Geo.Timeout); err != nil {
+		return err
+	}
+	return positiveDuration("geo refresh interval", c.Geo.RefreshInterval)
+}
+
+func positiveDuration(name, value string) error {
+	d, err := time.ParseDuration(value)
+	if err != nil || d <= 0 {
+		return fmt.Errorf("%s must be a positive duration", name)
+	}
+	return nil
+}
+
+func isLocalHost(hostname string) bool {
+	switch strings.ToLower(hostname) {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	default:
+		return false
+	}
 }
