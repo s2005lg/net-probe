@@ -11,8 +11,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/s2005lg/net-probe/internal/config"
+	"github.com/s2005lg/net-probe/internal/egressip"
 )
 
 type fakeRunner struct{}
@@ -39,6 +41,7 @@ func TestRunExitZero(t *testing.T) {
 	})
 
 	cfg := config.Default()
+	cfg.Collect.EgressIP.Enabled = false
 	cfg.Sinks = []config.Sink{{Type: "webhook", URL: "http://127.0.0.1/unused"}}
 	rc := Run(context.Background(), cfg, "0.1.0", fakeRunner{})
 	if rc != 0 {
@@ -67,6 +70,7 @@ func TestPersistedNodeID(t *testing.T) {
 
 func TestBuildLogsTelemetryDiagnosticsLocallyWithoutLeakingThem(t *testing.T) {
 	cfg := config.Default()
+	cfg.Collect.EgressIP.Enabled = false
 	cfg.Detect.CustomDir = t.TempDir()
 	cfg.Stats.Services = map[string]config.StatsService{
 		"xray": {Endpoint: "127.0.0.1:10085"},
@@ -96,6 +100,52 @@ func TestBuildLogsTelemetryDiagnosticsLocallyWithoutLeakingThem(t *testing.T) {
 	}
 	if !strings.Contains(string(body), `"error_code":"command_failed"`) {
 		t.Fatalf("report missing safe error code: %s", body)
+	}
+}
+
+func TestBuildReportsResolvedEgressIPs(t *testing.T) {
+	cfg := config.Default()
+	cfg.Detect.CustomDir = t.TempDir()
+	cfg.Sinks = []config.Sink{{Type: "webhook", URL: "https://example.com/report"}}
+	rep, err := buildWithEgress(context.Background(), cfg, "test", fakeRunner{}, nil,
+		func(context.Context, egressip.Options) egressip.Result {
+			return egressip.Result{IPv4: "8.8.8.8", IPv6: "2001:4860:4860::8888"}
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Host.EgressIPv4 != "8.8.8.8" || rep.Host.EgressIPv6 != "2001:4860:4860::8888" {
+		t.Fatalf("host = %+v", rep.Host)
+	}
+}
+
+func TestBuildPassesConfiguredEgressOptions(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	cfg := config.Default()
+	cfg.Detect.CustomDir = t.TempDir()
+	cfg.Collect.EgressIP.RefreshInterval = "7h"
+	cfg.Collect.EgressIP.Timeout = "4s"
+	cfg.Collect.EgressIP.IPv4Endpoints = []string{"https://v4-a.test", "https://v4-b.test"}
+	cfg.Collect.EgressIP.IPv6Endpoints = []string{"https://v6.test"}
+	var got egressip.Options
+	_, err := buildWithEgress(context.Background(), cfg, "test", fakeRunner{}, func(string, ...any) {},
+		func(_ context.Context, opts egressip.Options) egressip.Result {
+			got = opts
+			return egressip.Result{}
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCache := filepath.Join(configHome, "net-probe", "egress-ip-cache.json")
+	if !got.Enabled || got.RefreshInterval != 7*time.Hour || got.Timeout != 4*time.Second || got.CachePath != wantCache {
+		t.Fatalf("options = %+v", got)
+	}
+	if strings.Join(got.IPv4Endpoints, ",") != "https://v4-a.test,https://v4-b.test" || strings.Join(got.IPv6Endpoints, ",") != "https://v6.test" {
+		t.Fatalf("endpoints = %v, %v", got.IPv4Endpoints, got.IPv6Endpoints)
+	}
+	if got.Logf == nil {
+		t.Fatal("Logf = nil")
 	}
 }
 

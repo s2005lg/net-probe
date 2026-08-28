@@ -40,6 +40,7 @@ func TestPanelIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := config.Default()
+	cfg.Collect.EgressIP.Enabled = false
 	cfg.Detect.CustomDir = t.TempDir()
 	cfg.Agent.NodeID = "node-1"
 	cfg.Sinks = []config.Sink{{Type: "panel", URL: srv.URL, TokenEnv: "NP_TOKEN"}}

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/s2005lg/net-probe/internal/collect"
 	"github.com/s2005lg/net-probe/internal/config"
 	"github.com/s2005lg/net-probe/internal/detect"
+	"github.com/s2005lg/net-probe/internal/egressip"
 	"github.com/s2005lg/net-probe/internal/logx"
 	"github.com/s2005lg/net-probe/internal/report"
 	"github.com/s2005lg/net-probe/internal/sink"
@@ -71,6 +73,22 @@ func Build(ctx context.Context, cfg *config.Config, version string, runner detec
 }
 
 func build(ctx context.Context, cfg *config.Config, version string, runner detect.Runner, logf func(string, ...any)) (*report.Report, error) {
+	return buildWithEgress(ctx, cfg, version, runner, logf, func(ctx context.Context, opts egressip.Options) egressip.Result {
+		fetcher := egressip.Fetcher{Client: egressip.NewHTTPClient(opts.Timeout)}
+		return (egressip.Resolver{Discover: fetcher.Discover}).Resolve(ctx, opts)
+	})
+}
+
+type resolveEgressFunc func(context.Context, egressip.Options) egressip.Result
+
+func buildWithEgress(
+	ctx context.Context,
+	cfg *config.Config,
+	version string,
+	runner detect.Runner,
+	logf func(string, ...any),
+	resolve resolveEgressFunc,
+) (*report.Report, error) {
 	tmpls, err := allTemplates(cfg)
 	if err != nil {
 		return nil, err
@@ -87,6 +105,25 @@ func build(ctx context.Context, cfg *config.Config, version string, runner detec
 	if err != nil {
 		return nil, err
 	}
+	refreshInterval, err := time.ParseDuration(cfg.Collect.EgressIP.RefreshInterval)
+	if err != nil && cfg.Collect.EgressIP.Enabled {
+		return nil, fmt.Errorf("parse egress IP refresh interval: %w", err)
+	}
+	timeout, err := time.ParseDuration(cfg.Collect.EgressIP.Timeout)
+	if err != nil && cfg.Collect.EgressIP.Enabled {
+		return nil, fmt.Errorf("parse egress IP timeout: %w", err)
+	}
+	egress := resolve(ctx, egressip.Options{
+		Enabled:         cfg.Collect.EgressIP.Enabled,
+		RefreshInterval: refreshInterval,
+		Timeout:         timeout,
+		CachePath:       filepath.Join(ConfigDir(), "egress-ip-cache.json"),
+		IPv4Endpoints:   cfg.Collect.EgressIP.IPv4Endpoints,
+		IPv6Endpoints:   cfg.Collect.EgressIP.IPv6Endpoints,
+		Logf:            logf,
+	})
+	host.EgressIPv4 = egress.IPv4
+	host.EgressIPv6 = egress.IPv6
 	return &report.Report{
 		SchemaVersion: "1",
 		AgentVersion:  version,
