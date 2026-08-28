@@ -2,8 +2,10 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -25,9 +27,18 @@ type AgentConfig struct {
 	LogLevel string `toml:"log_level"`
 }
 
+type EgressIPConfig struct {
+	Enabled         bool     `toml:"enabled"`
+	RefreshInterval string   `toml:"refresh_interval"`
+	Timeout         string   `toml:"timeout"`
+	IPv4Endpoints   []string `toml:"ipv4_endpoints"`
+	IPv6Endpoints   []string `toml:"ipv6_endpoints"`
+}
+
 type CollectConfig struct {
-	DiskMounts []string `toml:"disk_mounts"`
-	Upgradable bool     `toml:"upgradable"`
+	DiskMounts []string       `toml:"disk_mounts"`
+	Upgradable bool           `toml:"upgradable"`
+	EgressIP   EgressIPConfig `toml:"egress_ip"`
 }
 
 type DetectConfig struct {
@@ -59,6 +70,13 @@ func Default() *Config {
 		Collect: CollectConfig{
 			DiskMounts: []string{"/"},
 			Upgradable: true,
+			EgressIP: EgressIPConfig{
+				Enabled:         true,
+				RefreshInterval: "6h",
+				Timeout:         "3s",
+				IPv4Endpoints:   []string{"https://api.ipify.org", "https://4.ident.me"},
+				IPv6Endpoints:   []string{"https://api6.ipify.org", "https://6.ident.me"},
+			},
 		},
 		Detect: DetectConfig{
 			Include:   []string{"hysteria2", "xray", "v2ray", "sing-box", "shadowsocks", "trojan", "tuic", "anytls"},
@@ -95,7 +113,57 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
+	if err := validateEgressIP(c.Collect.EgressIP); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateEgressIP(cfg EgressIPConfig) error {
+	if !cfg.Enabled {
+		return nil
+	}
+	refresh, err := time.ParseDuration(cfg.RefreshInterval)
+	if err != nil || refresh <= 0 {
+		return fmt.Errorf("egress refresh interval must be a positive duration")
+	}
+	timeout, err := time.ParseDuration(cfg.Timeout)
+	if err != nil || timeout <= 0 {
+		return fmt.Errorf("egress timeout must be a positive duration")
+	}
+	if len(cfg.IPv4Endpoints) == 0 {
+		return fmt.Errorf("egress IPv4 endpoint list must not be empty")
+	}
+	if len(cfg.IPv6Endpoints) == 0 {
+		return fmt.Errorf("egress IPv6 endpoint list must not be empty")
+	}
+	if err := validateEgressEndpoints("IPv4", cfg.IPv4Endpoints); err != nil {
+		return err
+	}
+	return validateEgressEndpoints("IPv6", cfg.IPv6Endpoints)
+}
+
+func validateEgressEndpoints(family string, endpoints []string) error {
+	for i, raw := range endpoints {
+		u, err := url.Parse(raw)
+		if err != nil || u.Scheme == "" || u.Hostname() == "" {
+			return fmt.Errorf("egress %s endpoint %d is invalid", family, i)
+		}
+		scheme := strings.ToLower(u.Scheme)
+		if scheme != "https" && !(scheme == "http" && isLocalHost(u.Hostname())) {
+			return fmt.Errorf("egress %s endpoint %d must use https (or local http)", family, i)
+		}
+	}
+	return nil
+}
+
+func isLocalHost(hostname string) bool {
+	switch strings.ToLower(hostname) {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	default:
+		return false
+	}
 }
 
 func ResolveToken(s Sink) (string, error) {

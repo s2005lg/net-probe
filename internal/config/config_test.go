@@ -3,6 +3,8 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -94,5 +96,37 @@ enabled = false
 	}
 	if cfg.Stats.Services["xray"].Enabled == nil || *cfg.Stats.Services["xray"].Enabled {
 		t.Fatalf("enabled = %#v", cfg.Stats.Services["xray"].Enabled)
+	}
+}
+
+func TestEgressIPDefaults(t *testing.T) {
+	cfg := Default()
+	got := cfg.Collect.EgressIP
+	if !got.Enabled || got.RefreshInterval != "6h" || got.Timeout != "3s" {
+		t.Fatalf("egress defaults = %+v", got)
+	}
+	if !reflect.DeepEqual(got.IPv4Endpoints, []string{"https://api.ipify.org", "https://4.ident.me"}) {
+		t.Fatalf("IPv4 endpoints = %v", got.IPv4Endpoints)
+	}
+	if !reflect.DeepEqual(got.IPv6Endpoints, []string{"https://api6.ipify.org", "https://6.ident.me"}) {
+		t.Fatalf("IPv6 endpoints = %v", got.IPv6Endpoints)
+	}
+}
+
+func TestValidateRejectsUnsafeEgressEndpoint(t *testing.T) {
+	cfg := Default()
+	cfg.Sinks = []Sink{{Type: "webhook", URL: "https://example.com/report"}}
+	cfg.Collect.EgressIP.IPv4Endpoints = []string{"http://public.example/ip"}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "egress IPv4 endpoint") {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidateAcceptsLocalEgressEndpoint(t *testing.T) {
+	cfg := Default()
+	cfg.Sinks = []Sink{{Type: "webhook", URL: "https://example.com/report"}}
+	cfg.Collect.EgressIP.IPv4Endpoints = []string{"http://127.0.0.1:8080/ip"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
 	}
 }

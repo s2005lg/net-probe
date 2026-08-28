@@ -60,6 +60,28 @@ func TestStatsOnlineClients(t *testing.T) {
 	}
 }
 
+func TestHostMarshalEgressIPs(t *testing.T) {
+	b, err := json.Marshal(Host{EgressIPv4: "203.0.113.7", EgressIPv6: "2001:db8::7"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(b)
+	if !strings.Contains(got, `"egress_ipv4":"203.0.113.7"`) ||
+		!strings.Contains(got, `"egress_ipv6":"2001:db8::7"`) {
+		t.Fatalf("host JSON = %s", got)
+	}
+}
+
+func TestHostMarshalOmitsEmptyEgressIPs(t *testing.T) {
+	b, err := json.Marshal(Host{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "egress_") {
+		t.Fatalf("host JSON = %s", b)
+	}
+}
+
 func uint64ptr(v uint64) *uint64 { return &v }
 
 func TestTelemetryMarshalPreservesSuccessfulZero(t *testing.T) {

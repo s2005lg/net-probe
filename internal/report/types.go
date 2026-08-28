@@ -8,6 +8,8 @@ type Host struct {
 	Arch              string  `json:"arch"`
 	IPv4              string  `json:"ipv4,omitempty"`
 	IPv6              string  `json:"ipv6,omitempty"`
+	EgressIPv4        string  `json:"egress_ipv4,omitempty"`
+	EgressIPv6        string  `json:"egress_ipv6,omitempty"`
 	UptimeSeconds     int64   `json:"uptime_seconds"`
 	Load1             float64 `json:"load1"`
 	Load5             float64 `json:"load5"`
