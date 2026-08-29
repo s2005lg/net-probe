@@ -258,7 +258,7 @@ func TestXrayTrafficAcceptsRealJSONCounterValues(t *testing.T) {
 	}{
 		{
 			name:   "string values",
-			out:    `{"stat":[{"name":"inbound>>>edge>>>traffic>>>uplink","value":"7"},{"name":"outbound>>>direct>>>traffic>>>downlink","value":"9"}]}`,
+			out:    `{"stat":[{"name":"inbound>>>edge>>>traffic>>>uplink","value":"7"},{"name":"inbound>>>edge>>>traffic>>>downlink","value":"9"}]}`,
 			wantTx: 7,
 			wantRx: 9,
 		},
@@ -271,6 +271,57 @@ func TestXrayTrafficAcceptsRealJSONCounterValues(t *testing.T) {
 		{
 			name: "explicit numeric and string zero",
 			out:  `{"stat":[{"name":"inbound>>>edge>>>traffic>>>uplink","value":0},{"name":"inbound>>>edge>>>traffic>>>downlink","value":"0"}]}`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			r := scriptedRunner{responses: map[string]runnerResponse{
+				"xray api statsquery -s test -pattern >>>traffic>>>": {out: tt.out},
+			}}
+			got, err := xrayTraffic(context.Background(), r, "test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.TxBytes == nil || *got.TxBytes != tt.wantTx || got.RxBytes == nil || *got.RxBytes != tt.wantRx {
+				t.Fatalf("traffic = %+v", got)
+			}
+		})
+	}
+}
+
+func TestXrayTrafficChoosesMostCompleteScope(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		out    string
+		wantTx uint64
+		wantRx uint64
+	}{
+		{
+			name:   "inbound wins over duplicate outbound and user totals",
+			out:    `{"stat":[{"name":"inbound>>>edge>>>traffic>>>uplink","value":"7"},{"name":"inbound>>>edge>>>traffic>>>downlink","value":"9"},{"name":"outbound>>>direct>>>traffic>>>uplink","value":"7"},{"name":"outbound>>>direct>>>traffic>>>downlink","value":"9"},{"name":"user>>>alice>>>traffic>>>uplink","value":"7"},{"name":"user>>>alice>>>traffic>>>downlink","value":"9"}]}`,
+			wantTx: 7,
+			wantRx: 9,
+		},
+		{
+			name:   "outbound wins over user when inbound is absent",
+			out:    `{"stat":[{"name":"outbound>>>direct>>>traffic>>>uplink","value":11},{"name":"outbound>>>direct>>>traffic>>>downlink","value":13},{"name":"user>>>alice>>>traffic>>>uplink","value":5},{"name":"user>>>alice>>>traffic>>>downlink","value":7}]}`,
+			wantTx: 11,
+			wantRx: 13,
+		},
+		{
+			name:   "user is used when higher priority scopes are absent",
+			out:    `{"stat":[{"name":"user>>>alice>>>traffic>>>uplink","value":5},{"name":"user>>>alice>>>traffic>>>downlink","value":7}]}`,
+			wantTx: 5,
+			wantRx: 7,
+		},
+		{
+			name:   "multiple inbound tags are summed",
+			out:    `{"stat":[{"name":"inbound>>>edge-one>>>traffic>>>uplink","value":3},{"name":"inbound>>>edge-one>>>traffic>>>downlink","value":4},{"name":"inbound>>>edge-two>>>traffic>>>uplink","value":5},{"name":"inbound>>>edge-two>>>traffic>>>downlink","value":6}]}`,
+			wantTx: 8,
+			wantRx: 10,
+		},
+		{
+			name: "omitted and explicit zero still make inbound present",
+			out:  `{"stat":[{"name":"inbound>>>edge>>>traffic>>>uplink"},{"name":"inbound>>>edge>>>traffic>>>downlink","value":0},{"name":"outbound>>>direct>>>traffic>>>uplink","value":11},{"name":"outbound>>>direct>>>traffic>>>downlink","value":13}]}`,
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

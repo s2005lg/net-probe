@@ -199,7 +199,7 @@ func xrayTraffic(ctx context.Context, r Runner, server string) (*report.TrafficT
 		return nil, invalidTelemetryResponse()
 	}
 
-	var tx, rx uint64
+	totals := make(map[string]*[2]uint64, 3)
 	seen := make(map[string]struct{}, len(*response.Stat))
 	for _, raw := range *response.Stat {
 		var record struct {
@@ -209,7 +209,7 @@ func xrayTraffic(ctx context.Context, r Runner, server string) (*report.TrafficT
 		if !decodeStrictJSON(raw, &record) || record.Name == nil {
 			return nil, invalidTelemetryResponse()
 		}
-		direction, ok := xrayCounterDirection(*record.Name)
+		scope, direction, ok := xrayCounterScopeAndDirection(*record.Name)
 		if !ok {
 			return nil, invalidTelemetryResponse()
 		}
@@ -221,20 +221,30 @@ func xrayTraffic(ctx context.Context, r Runner, server string) (*report.TrafficT
 		if !ok {
 			return nil, invalidTelemetryResponse()
 		}
+		total := totals[scope]
+		if total == nil {
+			total = &[2]uint64{}
+			totals[scope] = total
+		}
 		switch direction {
 		case "uplink":
-			if value > ^uint64(0)-tx {
+			if value > ^uint64(0)-total[0] {
 				return nil, invalidTelemetryResponse()
 			}
-			tx += value
+			total[0] += value
 		case "downlink":
-			if value > ^uint64(0)-rx {
+			if value > ^uint64(0)-total[1] {
 				return nil, invalidTelemetryResponse()
 			}
-			rx += value
+			total[1] += value
 		}
 	}
-	return &report.TrafficTelemetry{State: report.ObservationOK, TxBytes: uint64Ptr(tx), RxBytes: uint64Ptr(rx)}, nil
+	for _, scope := range []string{"inbound", "outbound", "user"} {
+		if total := totals[scope]; total != nil {
+			return &report.TrafficTelemetry{State: report.ObservationOK, TxBytes: uint64Ptr(total[0]), RxBytes: uint64Ptr(total[1])}, nil
+		}
+	}
+	return nil, invalidTelemetryResponse()
 }
 
 func decodeStrictJSON(data []byte, out any) bool {
@@ -247,20 +257,20 @@ func decodeStrictJSON(data []byte, out any) bool {
 	return decoder.Decode(&trailing) == io.EOF
 }
 
-func xrayCounterDirection(name string) (string, bool) {
+func xrayCounterScopeAndDirection(name string) (string, string, bool) {
 	parts := strings.Split(name, ">>>")
 	if len(parts) != 4 || strings.TrimSpace(parts[1]) == "" || parts[2] != "traffic" {
-		return "", false
+		return "", "", false
 	}
 	switch parts[0] {
 	case "inbound", "outbound", "user":
 	default:
-		return "", false
+		return "", "", false
 	}
 	if parts[3] != "uplink" && parts[3] != "downlink" {
-		return "", false
+		return "", "", false
 	}
-	return parts[3], true
+	return parts[0], parts[3], true
 }
 
 func xrayCounterValue(raw json.RawMessage) (uint64, bool) {
