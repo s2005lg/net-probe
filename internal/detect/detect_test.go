@@ -191,7 +191,7 @@ func TestDetectCapabilitiesTelemetryErrorDoesNotChangeStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := activeUnitRunner("xray")
-	runner.responses["xray api stats query -s 127.0.0.1:10085"] = runnerResponse{err: errors.New("statistics unavailable")}
+	runner.responses["xray api statsquery -s 127.0.0.1:10085 -pattern >>>traffic>>>"] = runnerResponse{err: errors.New("statistics unavailable")}
 	runner.responses["xray api statsonlineiplist -s 127.0.0.1:10085 -all"] = runnerResponse{err: errors.New("statistics unavailable")}
 	statsCfg := config.StatsConfig{Services: map[string]config.StatsService{
 		"xray": {Endpoint: "127.0.0.1:10085"},
@@ -215,7 +215,7 @@ func TestDetectCapabilitiesSuccessfulTelemetryPopulatesLegacyStats(t *testing.T)
 		t.Fatal(err)
 	}
 	runner := activeUnitRunner("xray")
-	runner.responses["xray api stats query -s 127.0.0.1:10085"] = runnerResponse{out: "inbound>>>edge>>>traffic>>>uplink 7\ninbound>>>edge>>>traffic>>>downlink 9"}
+	runner.responses["xray api statsquery -s 127.0.0.1:10085 -pattern >>>traffic>>>"] = runnerResponse{out: `{"stat":[{"name":"inbound>>>edge>>>traffic>>>uplink","value":"7"},{"name":"inbound>>>edge>>>traffic>>>downlink","value":"9"}]}`}
 	runner.responses["xray api statsonlineiplist -s 127.0.0.1:10085 -all"] = runnerResponse{out: `{"users":[{"ips":[{"ip":"1.2.3.4"}]}]}`}
 	statsCfg := config.StatsConfig{Services: map[string]config.StatsService{
 		"xray": {Endpoint: "127.0.0.1:10085"},

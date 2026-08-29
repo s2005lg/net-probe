@@ -188,57 +188,106 @@ func xrayTelemetry(ctx context.Context, r Runner, server string) TelemetryResult
 }
 
 func xrayTraffic(ctx context.Context, r Runner, server string) (*report.TrafficTelemetry, error) {
-	out, err := r.Run(ctx, "xray", "api", "stats", "query", "-s", server)
+	out, err := r.Run(ctx, "xray", "api", "statsquery", "-s", server, "-pattern", ">>>traffic>>>")
 	if err != nil {
 		return nil, &telemetryError{code: "command_failed", err: err}
 	}
+	var response struct {
+		Stat *[]json.RawMessage `json:"stat"`
+	}
+	if !decodeStrictJSON([]byte(out), &response) || response.Stat == nil || len(*response.Stat) == 0 {
+		return nil, invalidTelemetryResponse()
+	}
+
 	var tx, rx uint64
-	recognized := 0
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
+	seen := make(map[string]struct{}, len(*response.Stat))
+	for _, raw := range *response.Stat {
+		var record struct {
+			Name  *string         `json:"name"`
+			Value json.RawMessage `json:"value"`
 		}
-		direction, value, ok := parseXrayCounterRecord(line)
+		if !decodeStrictJSON(raw, &record) || record.Name == nil {
+			return nil, invalidTelemetryResponse()
+		}
+		direction, ok := xrayCounterDirection(*record.Name)
 		if !ok {
 			return nil, invalidTelemetryResponse()
 		}
-		recognized++
+		if _, duplicate := seen[*record.Name]; duplicate {
+			return nil, invalidTelemetryResponse()
+		}
+		seen[*record.Name] = struct{}{}
+		value, ok := xrayCounterValue(record.Value)
+		if !ok {
+			return nil, invalidTelemetryResponse()
+		}
 		switch direction {
 		case "uplink":
+			if value > ^uint64(0)-tx {
+				return nil, invalidTelemetryResponse()
+			}
 			tx += value
 		case "downlink":
+			if value > ^uint64(0)-rx {
+				return nil, invalidTelemetryResponse()
+			}
 			rx += value
 		}
-	}
-	if recognized == 0 {
-		return nil, invalidTelemetryResponse()
 	}
 	return &report.TrafficTelemetry{State: report.ObservationOK, TxBytes: uint64Ptr(tx), RxBytes: uint64Ptr(rx)}, nil
 }
 
-func parseXrayCounterRecord(line string) (string, uint64, bool) {
-	fields := strings.Fields(line)
-	if len(fields) != 2 {
-		return "", 0, false
+func decodeStrictJSON(data []byte, out any) bool {
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(out); err != nil {
+		return false
 	}
-	nameParts := strings.Split(fields[0], ">>>")
-	if len(nameParts) != 4 || nameParts[1] == "" || nameParts[2] != "traffic" {
-		return "", 0, false
+	var trailing any
+	return decoder.Decode(&trailing) == io.EOF
+}
+
+func xrayCounterDirection(name string) (string, bool) {
+	parts := strings.Split(name, ">>>")
+	if len(parts) != 4 || strings.TrimSpace(parts[1]) == "" || parts[2] != "traffic" {
+		return "", false
 	}
-	switch nameParts[0] {
+	switch parts[0] {
 	case "inbound", "outbound", "user":
 	default:
-		return "", 0, false
+		return "", false
 	}
-	if nameParts[3] != "uplink" && nameParts[3] != "downlink" {
-		return "", 0, false
+	if parts[3] != "uplink" && parts[3] != "downlink" {
+		return "", false
 	}
-	value, err := strconv.ParseUint(fields[1], 10, 64)
+	return parts[3], true
+}
+
+func xrayCounterValue(raw json.RawMessage) (uint64, bool) {
+	if len(raw) == 0 {
+		return 0, true
+	}
+	text := strings.TrimSpace(string(raw))
+	if len(text) > 0 && text[0] == '"' {
+		var valueString string
+		if err := json.Unmarshal(raw, &valueString); err != nil {
+			return 0, false
+		}
+		text = valueString
+	}
+	if text == "" {
+		return 0, false
+	}
+	for i := range len(text) {
+		if text[i] < '0' || text[i] > '9' {
+			return 0, false
+		}
+	}
+	value, err := strconv.ParseUint(text, 10, 63)
 	if err != nil {
-		return "", 0, false
+		return 0, false
 	}
-	return nameParts[3], value, true
+	return value, true
 }
 
 func xrayOnlineClients(ctx context.Context, r Runner, server string) (*report.CountTelemetry, error) {

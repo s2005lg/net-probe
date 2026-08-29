@@ -78,7 +78,7 @@ func TestBuildLogsTelemetryDiagnosticsLocallyWithoutLeakingThem(t *testing.T) {
 	runner := diagnosticRunner{responses: map[string]runnerResult{
 		"systemctl list-unit-files --type=service --no-legend --no-pager":                               {out: "xray.service enabled\n"},
 		"systemctl show xray --property=ActiveState,SubState,UnitFileState,NRestarts,MainPID,ExecStart": {out: "ActiveState=active\nUnitFileState=enabled\nMainPID=10"},
-		"xray api stats query -s 127.0.0.1:10085":                                                       {err: errors.New("controlled statistics failure")},
+		"xray api statsquery -s 127.0.0.1:10085 -pattern >>>traffic>>>":                                 {err: errors.New("controlled statistics failure")},
 		"xray api statsonlineiplist -s 127.0.0.1:10085 -all":                                            {err: errors.New("controlled statistics failure")},
 	}}
 	var logs []string

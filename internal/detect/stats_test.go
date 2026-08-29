@@ -163,8 +163,8 @@ func TestHysteria2TelemetryAcceptsExplicitZero(t *testing.T) {
 
 func TestXrayTelemetryKeepsOnlineWhenTrafficFails(t *testing.T) {
 	r := scriptedRunner{responses: map[string]runnerResponse{
-		"xray api stats query -s 127.0.0.1:8080":            {err: errors.New("stats unavailable")},
-		"xray api statsonlineiplist -s 127.0.0.1:8080 -all": {out: `{"users":[{"ips":[{"ip":"1.2.3.4"}]}]}`},
+		"xray api statsquery -s 127.0.0.1:8080 -pattern >>>traffic>>>": {err: errors.New("stats unavailable")},
+		"xray api statsonlineiplist -s 127.0.0.1:8080 -all":            {out: `{"users":[{"ips":[{"ip":"1.2.3.4"}]}]}`},
 	}}
 	result := CollectTelemetryWithRunner(context.Background(), "xray", "127.0.0.1:8080", "", r)
 	got := result.Telemetry
@@ -181,17 +181,31 @@ func TestXrayTelemetryRejectsUnknownMalformedAndInvalidCounters(t *testing.T) {
 		name string
 		out  string
 	}{
-		{name: "unknown", out: "mystery 7"},
-		{name: "missing value", out: "uplink"},
-		{name: "invalid number", out: "uplink nope"},
-		{name: "negative number", out: "downlink -1"},
-		{name: "direction substring", out: "not-uplink 7"},
-		{name: "extra counter field", out: "uplink garbage 7"},
-		{name: "malformed structured name", out: "inbound>>>edge>>>uplink 7"},
+		{name: "missing stat", out: `{}`},
+		{name: "null stat", out: `{"stat":null}`},
+		{name: "empty stat", out: `{"stat":[]}`},
+		{name: "null item", out: `{"stat":[null]}`},
+		{name: "wrong stat type", out: `{"stat":{}}`},
+		{name: "wrong item type", out: `{"stat":["bad"]}`},
+		{name: "wrong name type", out: `{"stat":[{"name":7,"value":1}]}`},
+		{name: "missing name", out: `{"stat":[{"value":1}]}`},
+		{name: "direction substring", out: `{"stat":[{"name":"inbound>>>edge>>>traffic>>>not-uplink","value":7}]}`},
+		{name: "extra name segment", out: `{"stat":[{"name":"inbound>>>edge>>>traffic>>>uplink>>>extra","value":7}]}`},
+		{name: "malformed structured name", out: `{"stat":[{"name":"inbound>>>edge>>>uplink","value":7}]}`},
+		{name: "bad numeric string", out: `{"stat":[{"name":"inbound>>>edge>>>traffic>>>uplink","value":"nope"}]}`},
+		{name: "negative number", out: `{"stat":[{"name":"inbound>>>edge>>>traffic>>>downlink","value":-1}]}`},
+		{name: "negative string", out: `{"stat":[{"name":"inbound>>>edge>>>traffic>>>downlink","value":"-1"}]}`},
+		{name: "overflow number", out: `{"stat":[{"name":"inbound>>>edge>>>traffic>>>uplink","value":9223372036854775808}]}`},
+		{name: "overflow string", out: `{"stat":[{"name":"inbound>>>edge>>>traffic>>>uplink","value":"9223372036854775808"}]}`},
+		{name: "aggregate overflow", out: `{"stat":[{"name":"inbound>>>one>>>traffic>>>uplink","value":"9223372036854775807"},{"name":"inbound>>>two>>>traffic>>>uplink","value":"9223372036854775807"},{"name":"inbound>>>three>>>traffic>>>uplink","value":"9223372036854775807"}]}`},
+		{name: "null value", out: `{"stat":[{"name":"inbound>>>edge>>>traffic>>>uplink","value":null}]}`},
+		{name: "unknown response field", out: `{"stat":[{"name":"inbound>>>edge>>>traffic>>>uplink","value":7}],"extra":true}`},
+		{name: "unknown item field", out: `{"stat":[{"name":"inbound>>>edge>>>traffic>>>uplink","value":7,"extra":true}]}`},
+		{name: "duplicate counter name", out: `{"stat":[{"name":"inbound>>>edge>>>traffic>>>uplink","value":7},{"name":"inbound>>>edge>>>traffic>>>uplink","value":8}]}`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			r := scriptedRunner{responses: map[string]runnerResponse{
-				"xray api stats query -s test": {out: tt.out},
+				"xray api statsquery -s test -pattern >>>traffic>>>": {out: tt.out},
 			}}
 			_, err := xrayTraffic(context.Background(), r, "test")
 			if err == nil || errorCode(err) != "invalid_response" {
@@ -223,10 +237,10 @@ func TestXrayOnlineTelemetryRejectsMissingStructure(t *testing.T) {
 	}
 }
 
-func TestXrayTelemetryAcceptsExplicitZero(t *testing.T) {
+func TestXrayTelemetryAcceptsOmittedZero(t *testing.T) {
 	r := scriptedRunner{responses: map[string]runnerResponse{
-		"xray api stats query -s test":            {out: "inbound>>>edge>>>traffic>>>uplink 0\ninbound>>>edge>>>traffic>>>downlink 0"},
-		"xray api statsonlineiplist -s test -all": {out: `{"users":[]}`},
+		"xray api statsquery -s test -pattern >>>traffic>>>": {out: `{"stat":[{"name":"inbound>>>edge>>>traffic>>>uplink"},{"name":"inbound>>>edge>>>traffic>>>downlink"}]}`},
+		"xray api statsonlineiplist -s test -all":            {out: `{"users":[]}`},
 	}}
 	got := CollectTelemetryWithRunner(context.Background(), "xray", "test", "", r).Telemetry
 	if got.Traffic.State != report.ObservationOK || *got.Traffic.TxBytes != 0 || *got.Traffic.RxBytes != 0 ||
@@ -235,16 +249,42 @@ func TestXrayTelemetryAcceptsExplicitZero(t *testing.T) {
 	}
 }
 
-func TestXrayTrafficAcceptsStructuredCounterRecords(t *testing.T) {
-	r := scriptedRunner{responses: map[string]runnerResponse{
-		"xray api stats query -s test": {out: "inbound>>>edge>>>traffic>>>uplink 7\noutbound>>>direct>>>traffic>>>downlink 9"},
-	}}
-	got, err := xrayTraffic(context.Background(), r, "test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.TxBytes == nil || *got.TxBytes != 7 || got.RxBytes == nil || *got.RxBytes != 9 {
-		t.Fatalf("traffic = %+v", got)
+func TestXrayTrafficAcceptsRealJSONCounterValues(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		out    string
+		wantTx uint64
+		wantRx uint64
+	}{
+		{
+			name:   "string values",
+			out:    `{"stat":[{"name":"inbound>>>edge>>>traffic>>>uplink","value":"7"},{"name":"outbound>>>direct>>>traffic>>>downlink","value":"9"}]}`,
+			wantTx: 7,
+			wantRx: 9,
+		},
+		{
+			name:   "numeric values",
+			out:    `{"stat":[{"name":"user>>>alice@example.com>>>traffic>>>uplink","value":7},{"name":"user>>>alice@example.com>>>traffic>>>downlink","value":9}]}`,
+			wantTx: 7,
+			wantRx: 9,
+		},
+		{
+			name: "explicit numeric and string zero",
+			out:  `{"stat":[{"name":"inbound>>>edge>>>traffic>>>uplink","value":0},{"name":"inbound>>>edge>>>traffic>>>downlink","value":"0"}]}`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			r := scriptedRunner{responses: map[string]runnerResponse{
+				"xray api statsquery -s test -pattern >>>traffic>>>": {out: tt.out},
+			}}
+			got, err := xrayTraffic(context.Background(), r, "test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.TxBytes == nil || *got.TxBytes != tt.wantTx || got.RxBytes == nil || *got.RxBytes != tt.wantRx {
+				t.Fatalf("traffic = %+v", got)
+			}
+		})
 	}
 }
 
