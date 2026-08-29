@@ -2,6 +2,24 @@ package netaddr
 
 import "net/netip"
 
+// globallyReachableExceptions are IANA special-purpose assignments explicitly
+// marked globally reachable inside otherwise denied registry blocks.
+var globallyReachableExceptions = []netip.Prefix{
+	netip.MustParsePrefix("192.0.0.9/32"),
+	netip.MustParsePrefix("192.0.0.10/32"),
+	netip.MustParsePrefix("192.31.196.0/24"),
+	netip.MustParsePrefix("192.52.193.0/24"),
+	netip.MustParsePrefix("192.175.48.0/24"),
+	netip.MustParsePrefix("2001:1::1/128"),
+	netip.MustParsePrefix("2001:1::2/128"),
+	netip.MustParsePrefix("2001:1::3/128"),
+	netip.MustParsePrefix("2001:3::/32"),
+	netip.MustParsePrefix("2001:4:112::/48"),
+	netip.MustParsePrefix("2001:20::/28"),
+	netip.MustParsePrefix("2001:30::/28"),
+	netip.MustParsePrefix("2620:4f:8000::/48"),
+}
+
 // specialUsePrefixes contains IANA special-purpose address space that can be
 // reported as global unicast by netip but is not a public endpoint identity.
 var specialUsePrefixes = []netip.Prefix{
@@ -14,11 +32,8 @@ var specialUsePrefixes = []netip.Prefix{
 	netip.MustParsePrefix("172.16.0.0/12"),
 	netip.MustParsePrefix("192.0.0.0/24"),
 	netip.MustParsePrefix("192.0.2.0/24"),
-	netip.MustParsePrefix("192.31.196.0/24"),
-	netip.MustParsePrefix("192.52.193.0/24"),
 	netip.MustParsePrefix("192.88.99.0/24"),
 	netip.MustParsePrefix("192.168.0.0/16"),
-	netip.MustParsePrefix("192.175.48.0/24"),
 	netip.MustParsePrefix("198.18.0.0/15"),
 	netip.MustParsePrefix("198.51.100.0/24"),
 	netip.MustParsePrefix("203.0.113.0/24"),
@@ -35,7 +50,6 @@ var specialUsePrefixes = []netip.Prefix{
 	netip.MustParsePrefix("2001:2::/48"),
 	netip.MustParsePrefix("2001:db8::/32"),
 	netip.MustParsePrefix("2002::/16"),
-	netip.MustParsePrefix("2620:4f:8000::/48"),
 	netip.MustParsePrefix("3ffe::/16"),
 	netip.MustParsePrefix("3fff::/20"),
 	netip.MustParsePrefix("5f00::/16"),
@@ -53,6 +67,11 @@ func IsPublic(addr netip.Addr) bool {
 	addr = addr.Unmap()
 	if !addr.IsGlobalUnicast() {
 		return false
+	}
+	for _, prefix := range globallyReachableExceptions {
+		if prefix.Contains(addr) {
+			return true
+		}
 	}
 	for _, prefix := range specialUsePrefixes {
 		if prefix.Contains(addr) {

@@ -53,7 +53,7 @@ func TestPanelIntegration(t *testing.T) {
 		"systemctl show xray --property=ActiveState,SubState,UnitFileState,NRestarts,MainPID,ExecStart": {
 			out: "ActiveState=active\nUnitFileState=enabled\nMainPID=10\nExecStart={ path=/usr/bin/xray ; argv[]=/usr/bin/xray run -config " + configPath + " ; ignore_errors=no }",
 		},
-		"xray api stats query -s 127.0.0.1:10085":            {out: "uplink 7\ndownlink 9"},
+		"xray api stats query -s 127.0.0.1:10085":            {out: "inbound>>>edge>>>traffic>>>uplink 7\ninbound>>>edge>>>traffic>>>downlink 9"},
 		"xray api statsonlineiplist -s 127.0.0.1:10085 -all": {out: `{"users":[{"ips":[{"ip":"192.0.2.1"}]}]}`},
 	}}
 	rep, err := Build(context.Background(), cfg, "0.1.0", runner)

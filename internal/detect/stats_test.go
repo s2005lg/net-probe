@@ -129,11 +129,21 @@ func TestHysteria2TelemetryRejectsInvalidResponseStructure(t *testing.T) {
 		})
 	}
 
-	withRoundTripper(t, func(*http.Request) (*http.Response, error) {
-		return jsonResponse(http.StatusOK, `null`), nil
-	})
-	if _, err := hysteria2OnlineClients(context.Background(), "http://unused", ""); err == nil || errorCode(err) != "invalid_response" {
-		t.Fatalf("hysteria2OnlineClients() error = %v code=%q", err, errorCode(err))
+	for _, tt := range []struct {
+		name string
+		body string
+	}{
+		{name: "null online map", body: `null`},
+		{name: "null online entry", body: `{"user":null}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			withRoundTripper(t, func(*http.Request) (*http.Response, error) {
+				return jsonResponse(http.StatusOK, tt.body), nil
+			})
+			if _, err := hysteria2OnlineClients(context.Background(), "http://unused", ""); err == nil || errorCode(err) != "invalid_response" {
+				t.Fatalf("hysteria2OnlineClients() error = %v code=%q", err, errorCode(err))
+			}
+		})
 	}
 }
 
@@ -175,6 +185,9 @@ func TestXrayTelemetryRejectsUnknownMalformedAndInvalidCounters(t *testing.T) {
 		{name: "missing value", out: "uplink"},
 		{name: "invalid number", out: "uplink nope"},
 		{name: "negative number", out: "downlink -1"},
+		{name: "direction substring", out: "not-uplink 7"},
+		{name: "extra counter field", out: "uplink garbage 7"},
+		{name: "malformed structured name", out: "inbound>>>edge>>>uplink 7"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			r := scriptedRunner{responses: map[string]runnerResponse{
@@ -212,13 +225,26 @@ func TestXrayOnlineTelemetryRejectsMissingStructure(t *testing.T) {
 
 func TestXrayTelemetryAcceptsExplicitZero(t *testing.T) {
 	r := scriptedRunner{responses: map[string]runnerResponse{
-		"xray api stats query -s test":            {out: "uplink 0\ndownlink 0"},
+		"xray api stats query -s test":            {out: "inbound>>>edge>>>traffic>>>uplink 0\ninbound>>>edge>>>traffic>>>downlink 0"},
 		"xray api statsonlineiplist -s test -all": {out: `{"users":[]}`},
 	}}
 	got := CollectTelemetryWithRunner(context.Background(), "xray", "test", "", r).Telemetry
 	if got.Traffic.State != report.ObservationOK || *got.Traffic.TxBytes != 0 || *got.Traffic.RxBytes != 0 ||
 		got.OnlineClients.State != report.ObservationOK || *got.OnlineClients.Value != 0 {
 		t.Fatalf("telemetry = %+v", got)
+	}
+}
+
+func TestXrayTrafficAcceptsStructuredCounterRecords(t *testing.T) {
+	r := scriptedRunner{responses: map[string]runnerResponse{
+		"xray api stats query -s test": {out: "inbound>>>edge>>>traffic>>>uplink 7\noutbound>>>direct>>>traffic>>>downlink 9"},
+	}}
+	got, err := xrayTraffic(context.Background(), r, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TxBytes == nil || *got.TxBytes != 7 || got.RxBytes == nil || *got.RxBytes != 9 {
+		t.Fatalf("traffic = %+v", got)
 	}
 }
 

@@ -215,7 +215,7 @@ func TestDetectCapabilitiesSuccessfulTelemetryPopulatesLegacyStats(t *testing.T)
 		t.Fatal(err)
 	}
 	runner := activeUnitRunner("xray")
-	runner.responses["xray api stats query -s 127.0.0.1:10085"] = runnerResponse{out: "uplink 7\ndownlink 9"}
+	runner.responses["xray api stats query -s 127.0.0.1:10085"] = runnerResponse{out: "inbound>>>edge>>>traffic>>>uplink 7\ninbound>>>edge>>>traffic>>>downlink 9"}
 	runner.responses["xray api statsonlineiplist -s 127.0.0.1:10085 -all"] = runnerResponse{out: `{"users":[{"ips":[{"ip":"1.2.3.4"}]}]}`}
 	statsCfg := config.StatsConfig{Services: map[string]config.StatsService{
 		"xray": {Endpoint: "127.0.0.1:10085"},

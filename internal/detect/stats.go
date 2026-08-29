@@ -123,7 +123,7 @@ func hysteria2Traffic(ctx context.Context, endpoint, secret string) (*report.Tra
 }
 
 func hysteria2OnlineClients(ctx context.Context, endpoint, secret string) (*report.CountTelemetry, error) {
-	var online map[string]uint64
+	var online map[string]*uint64
 	if err := getStatsJSON(ctx, endpoint+"/online", secret, &online); err != nil {
 		return nil, err
 	}
@@ -132,7 +132,10 @@ func hysteria2OnlineClients(ctx context.Context, endpoint, secret string) (*repo
 	}
 	var total uint64
 	for _, n := range online {
-		total += n
+		if n == nil {
+			return nil, invalidTelemetryResponse()
+		}
+		total += *n
 	}
 	return &report.CountTelemetry{State: report.ObservationOK, Value: uint64Ptr(total)}, nil
 }
@@ -192,31 +195,50 @@ func xrayTraffic(ctx context.Context, r Runner, server string) (*report.TrafficT
 	var tx, rx uint64
 	recognized := 0
 	for _, line := range strings.Split(out, "\n") {
-		isUplink := strings.Contains(line, "uplink")
-		isDownlink := strings.Contains(line, "downlink")
-		if !isUplink && !isDownlink {
+		line = strings.TrimSpace(line)
+		if line == "" {
 			continue
 		}
-		f := strings.Fields(line)
-		if len(f) < 2 {
-			return nil, invalidTelemetryResponse()
-		}
-		v, err := strconv.ParseUint(f[len(f)-1], 10, 64)
-		if err != nil || isUplink == isDownlink {
+		direction, value, ok := parseXrayCounterRecord(line)
+		if !ok {
 			return nil, invalidTelemetryResponse()
 		}
 		recognized++
-		if isUplink {
-			tx += v
-		}
-		if isDownlink {
-			rx += v
+		switch direction {
+		case "uplink":
+			tx += value
+		case "downlink":
+			rx += value
 		}
 	}
 	if recognized == 0 {
 		return nil, invalidTelemetryResponse()
 	}
 	return &report.TrafficTelemetry{State: report.ObservationOK, TxBytes: uint64Ptr(tx), RxBytes: uint64Ptr(rx)}, nil
+}
+
+func parseXrayCounterRecord(line string) (string, uint64, bool) {
+	fields := strings.Fields(line)
+	if len(fields) != 2 {
+		return "", 0, false
+	}
+	nameParts := strings.Split(fields[0], ">>>")
+	if len(nameParts) != 4 || nameParts[1] == "" || nameParts[2] != "traffic" {
+		return "", 0, false
+	}
+	switch nameParts[0] {
+	case "inbound", "outbound", "user":
+	default:
+		return "", 0, false
+	}
+	if nameParts[3] != "uplink" && nameParts[3] != "downlink" {
+		return "", 0, false
+	}
+	value, err := strconv.ParseUint(fields[1], 10, 64)
+	if err != nil {
+		return "", 0, false
+	}
+	return nameParts[3], value, true
 }
 
 func xrayOnlineClients(ctx context.Context, r Runner, server string) (*report.CountTelemetry, error) {
