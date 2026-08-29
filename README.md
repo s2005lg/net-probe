@@ -157,6 +157,13 @@ token_env = "NET_PROBE_PANEL_TOKEN"
 disk_mounts = ["/"]
 upgradable = true
 
+[collect.egress_ip]
+enabled = true
+refresh_interval = "6h"
+timeout = "3s"
+ipv4_endpoints = ["https://api.ipify.org", "https://4.ident.me"]
+ipv6_endpoints = ["https://api6.ipify.org", "https://6.ident.me"]
+
 [detect]
 include = ["hysteria2", "xray", "v2ray", "sing-box", "shadowsocks", "trojan", "tuic", "anytls"]
 custom_dir = "/etc/net-probe/services.d"
@@ -164,6 +171,30 @@ custom_dir = "/etc/net-probe/services.d"
 
 Provide the token in the environment when the timer runs, for example in a
 systemd drop-in or the shell that runs `net-probe`.
+
+Omit `[collect.egress_ip]` to use these defaults. Successful public egress IP
+values are cached in `/etc/net-probe/egress-ip-cache.json`; a provider failure
+does not stop the rest of the report from being sent.
+
+## Panel geolocation configuration
+
+Add the following optional default section to
+`/etc/net-probe-panel/config.toml` to configure public egress IP geolocation:
+
+```toml
+[geo]
+refresh_interval = "12h"
+provider = "ipwhois"
+url = "https://ipwho.is/{ip}?lang=zh-CN"
+timeout = "4s"
+token_env = ""
+```
+
+The default ipwhois provider allows 1,000 requests per day. The Panel keeps a
+SQLite cache and reconciles node geography with that cache, so repeated IPs do
+not require a provider request on every report. For compatible bearer-token
+providers, set `token_env` to the name of an environment variable containing
+the token; do not put the token itself in the configuration file.
 
 ## Validate configuration and preview a report
 
@@ -404,12 +435,37 @@ token_env = "NET_PROBE_PANEL_TOKEN"
 disk_mounts = ["/"]
 upgradable = true
 
+[collect.egress_ip]
+enabled = true
+refresh_interval = "6h"
+timeout = "3s"
+ipv4_endpoints = ["https://api.ipify.org", "https://4.ident.me"]
+ipv6_endpoints = ["https://api6.ipify.org", "https://6.ident.me"]
+
 [detect]
 include = ["hysteria2", "xray", "v2ray", "sing-box", "shadowsocks", "trojan", "tuic", "anytls"]
 custom_dir = "/etc/net-probe/services.d"
 ```
 
 在 timer 运行时通过环境变量提供 Token，例如在 systemd drop-in 文件或运行 `net-probe` 的 shell 中设置。
+
+省略 `[collect.egress_ip]` 时会使用这些默认值。成功获取的公网出口 IP 会缓存到
+`/etc/net-probe/egress-ip-cache.json`；单个 provider 失败不会阻止其余报告发送。
+
+### Panel 地理位置配置
+
+在 `/etc/net-probe-panel/config.toml` 中加入以下可选的默认段，以配置公网出口 IP 的地理位置查询：
+
+```toml
+[geo]
+refresh_interval = "12h"
+provider = "ipwhois"
+url = "https://ipwho.is/{ip}?lang=zh-CN"
+timeout = "4s"
+token_env = ""
+```
+
+默认的 ipwhois provider 每天允许 1,000 次请求。Panel 使用 SQLite 缓存并将节点地理位置与缓存协调，因此重复 IP 不会在每次上报时都请求 provider。对于兼容 bearer token 的 provider，请将 `token_env` 设为包含 Token 的环境变量名；不要把 Token 本身写入配置文件。
 
 ### 校验配置并预览报告
 
