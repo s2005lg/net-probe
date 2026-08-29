@@ -24,6 +24,7 @@ import {
   formatUptime,
 } from "../lib/format";
 import { aggregateTraffic, type TrafficPoint } from "../lib/traffic";
+import { egressIP } from "../lib/host";
 
 const EMPTY_LABELS = {
   all_unsupported: "当前服务不提供流量指标",
@@ -93,10 +94,11 @@ export default function NodeDetailPage() {
         <StatusBadge status={node.status} />
       </div>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <InfoCard label="主机名" value={host.hostname} />
         <InfoCard label="系统" value={[host.os, host.kernel, host.arch].filter(Boolean).join(" ")} />
-        <InfoCard label="IPv4" value={host.ipv4 || host.ipv6 || "—"} />
+        <InfoCard label="出口 IP" value={egressIP(host)} />
+        <InfoCard label="国家/地区" value={node.ip_location || "—"} />
         <InfoCard label="运行时长" value={formatUptime(host.uptime_seconds)} />
       </div>
 

@@ -6,6 +6,8 @@ export interface Host {
   arch: string;
   ipv4?: string;
   ipv6?: string;
+  egress_ipv4?: string;
+  egress_ipv6?: string;
   uptime_seconds: number;
   load1: number;
   load5: number;

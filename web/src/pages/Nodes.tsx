@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import StatusBadge from "../components/StatusBadge";
 import { api, nodeName, type Node, type Tag } from "../lib/api";
 import { formatRelative } from "../lib/format";
+import { egressIP } from "../lib/host";
 
 const PAGE_SIZE = 10;
 
@@ -163,8 +164,8 @@ export default function NodesPage() {
           <thead className="text-muted">
             <tr className="border-b border-edge">
               <th className="px-3 py-2 font-medium">名称</th>
-              <th className="px-3 py-2 font-medium">IP</th>
-              <th className="px-3 py-2 font-medium">IP出口地址</th>
+              <th className="px-3 py-2 font-medium">出口 IP</th>
+              <th className="px-3 py-2 font-medium">国家/地区</th>
               <th className="px-3 py-2 font-medium">服务</th>
               <th className="px-3 py-2 font-medium">版本</th>
               <th className="px-3 py-2 font-medium">状态</th>
@@ -189,7 +190,7 @@ export default function NodesPage() {
                     </div>
                   ) : null}
                 </td>
-                <td className="px-3 py-2 text-muted">{n.host.ipv4 || n.host.ipv6 || "—"}</td>
+                <td className="px-3 py-2 text-muted">{egressIP(n.host)}</td>
                 <td className="px-3 py-2 text-muted">{n.ip_location || "—"}</td>
                 <td className="px-3 py-2 text-muted">
                   {n.services.filter((s) => s.type !== "generic").map((s) => s.type).join(", ") || "—"}
@@ -231,7 +232,7 @@ export default function NodesPage() {
                     {nodeName(n)}
                   </Link>
                   <div className="mt-0.5 truncate text-xs text-muted">
-                    {n.host.ipv4 || n.host.ipv6 || "—"}
+                    {egressIP(n.host)}
                   </div>
                 </div>
                 <StatusBadge status={n.status} />
@@ -247,7 +248,11 @@ export default function NodesPage() {
               ) : null}
               <dl className="mt-3 space-y-1 text-sm text-muted">
                 <div className="flex justify-between gap-2">
-                  <dt>IP出口地址</dt>
+                  <dt>出口 IP</dt>
+                  <dd className="truncate text-fg">{egressIP(n.host)}</dd>
+                </div>
+                <div className="flex justify-between gap-2">
+                  <dt>国家/地区</dt>
                   <dd className="truncate text-fg">{n.ip_location || "—"}</dd>
                 </div>
                 <div className="flex justify-between gap-2">
