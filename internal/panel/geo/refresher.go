@@ -25,6 +25,9 @@ type Refresher struct {
 	dirty      map[string]struct{}
 	logf       func(string, ...any)
 	now        func() time.Time
+
+	beforeObserve      func(string, report.Host)
+	afterReconcileLoad func()
 }
 
 func NewRefresher(d *sql.DB, provider Provider, ttl time.Duration, logf func(string, ...any)) *Refresher {
@@ -62,7 +65,15 @@ func (r *Refresher) Run(ctx context.Context) {
 }
 
 func (r *Refresher) ObserveNode(ctx context.Context, nodeID string, host report.Host) error {
-	return r.observeNode(ctx, nodeID, host, nil)
+	hostJSON, err := json.Marshal(host)
+	if err != nil {
+		return err
+	}
+	if r.beforeObserve != nil {
+		r.beforeObserve(nodeID, host)
+	}
+	expectedHostJSON := string(hostJSON)
+	return r.observeNode(ctx, nodeID, host, &expectedHostJSON)
 }
 
 func (r *Refresher) observeNode(ctx context.Context, nodeID string, host report.Host, expectedHostJSON *string) error {
@@ -115,6 +126,9 @@ func (r *Refresher) Reconcile(ctx context.Context) error {
 	nodes, err := r.reconcileNodes(ctx)
 	if err != nil {
 		return err
+	}
+	if r.afterReconcileLoad != nil {
+		r.afterReconcileLoad()
 	}
 	for _, node := range nodes {
 		var host report.Host

@@ -102,6 +102,18 @@ func insertNode(t *testing.T, d *sql.DB, nodeID string, host report.Host) {
 	}
 }
 
+func persistNodeHost(t *testing.T, d *sql.DB, nodeID string, host report.Host) string {
+	t.Helper()
+	b, err := json.Marshal(host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Exec(`UPDATE nodes SET last_host_json=? WHERE node_id=?`, string(b), nodeID); err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
 func TestObserveNodeQueuesNewPublicIP(t *testing.T) {
 	d := openGeoTestDB(t)
 	insertNode(t, d, "n1", report.Host{EgressIPv4: "8.8.8.8"})
@@ -245,6 +257,51 @@ func TestObserveNodeIPChangeClearsOldLocationImmediately(t *testing.T) {
 	}
 	if geoIP != "1.1.1.1" || location != "" || country != "" || region != "" || city != "" || updatedAt != 0 {
 		t.Fatalf("geography = %q %q %q %q %q %d", geoIP, location, country, region, city, updatedAt)
+	}
+}
+
+func TestObserveNodeSnapshotCannotOverwriteNewerReport(t *testing.T) {
+	d := openGeoTestDB(t)
+	oldHost := report.Host{EgressIPv4: "8.8.8.8"}
+	insertNode(t, d, "n1", oldHost)
+	r := NewRefresher(d, &fakeProvider{locations: map[string]Location{}}, 12*time.Hour, nil)
+	paused := make(chan struct{})
+	resume := make(chan struct{})
+	r.beforeObserve = func(_ string, host report.Host) {
+		if EffectiveIP(host) == "8.8.8.8" {
+			close(paused)
+			<-resume
+		}
+	}
+
+	oldDone := make(chan error, 1)
+	go func() { oldDone <- r.ObserveNode(context.Background(), "n1", oldHost) }()
+	select {
+	case <-paused:
+	case <-time.After(time.Second):
+		close(resume)
+		<-oldDone
+		t.Fatal("old observation did not pause before its update")
+	}
+
+	newHost := report.Host{EgressIPv4: "1.1.1.1"}
+	newJSON := persistNodeHost(t, d, "n1", newHost)
+	if err := r.ObserveNode(context.Background(), "n1", newHost); err != nil {
+		close(resume)
+		<-oldDone
+		t.Fatal(err)
+	}
+	close(resume)
+	if err := <-oldDone; err != nil {
+		t.Fatal(err)
+	}
+
+	var hostJSON, geoIP string
+	if err := d.QueryRow(`SELECT COALESCE(last_host_json,''), COALESCE(ip_geo_ip,'') FROM nodes WHERE node_id='n1'`).Scan(&hostJSON, &geoIP); err != nil {
+		t.Fatal(err)
+	}
+	if hostJSON != newJSON || geoIP != "1.1.1.1" {
+		t.Fatalf("last_host_json=%q ip_geo_ip=%q", hostJSON, geoIP)
 	}
 }
 
@@ -407,6 +464,7 @@ func TestOldLookupCannotOverwriteNewIP(t *testing.T) {
 		close(block)
 		t.Fatal("old lookup did not start")
 	}
+	persistNodeHost(t, d, "n1", report.Host{EgressIPv4: "1.1.1.1"})
 	if err := r.ObserveNode(context.Background(), "n1", report.Host{EgressIPv4: "1.1.1.1"}); err != nil {
 		close(block)
 		t.Fatal(err)
@@ -620,40 +678,28 @@ func TestReconcileClosesRowsBeforeObservationAndSkipsInvalidJSON(t *testing.T) {
 
 func TestReconcileSnapshotCannotOverwriteNewerReport(t *testing.T) {
 	d := openGeoTestDB(t)
-	insertNode(t, d, "pause", report.Host{})
-	if _, err := d.Exec(`UPDATE nodes SET last_host_json='not-json' WHERE node_id='pause'`); err != nil {
-		t.Fatal(err)
-	}
 	oldHost := report.Host{EgressIPv4: "8.8.8.8"}
 	insertNode(t, d, "target", oldHost)
 
 	paused := make(chan struct{})
 	resume := make(chan struct{})
-	r := NewRefresher(d, &fakeProvider{locations: map[string]Location{}}, 12*time.Hour, func(format string, args ...any) {
-		if strings.Contains(fmt.Sprintf(format, args...), "pause") {
-			close(paused)
-			<-resume
-		}
-	})
+	r := NewRefresher(d, &fakeProvider{locations: map[string]Location{}}, 12*time.Hour, nil)
+	r.afterReconcileLoad = func() {
+		close(paused)
+		<-resume
+	}
 	reconcileDone := make(chan error, 1)
 	go func() { reconcileDone <- r.Reconcile(context.Background()) }()
 	select {
 	case <-paused:
 	case <-time.After(time.Second):
 		close(resume)
+		<-reconcileDone
 		t.Fatal("reconciliation did not pause after materializing rows")
 	}
 
 	newHost := report.Host{EgressIPv4: "1.1.1.1"}
-	newJSON, err := json.Marshal(newHost)
-	if err != nil {
-		close(resume)
-		t.Fatal(err)
-	}
-	if _, err := d.Exec(`UPDATE nodes SET last_host_json=? WHERE node_id='target'`, string(newJSON)); err != nil {
-		close(resume)
-		t.Fatal(err)
-	}
+	newJSON := persistNodeHost(t, d, "target", newHost)
 	if err := r.ObserveNode(context.Background(), "target", newHost); err != nil {
 		close(resume)
 		t.Fatal(err)
@@ -663,11 +709,11 @@ func TestReconcileSnapshotCannotOverwriteNewerReport(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var geoIP string
-	if err := d.QueryRow(`SELECT COALESCE(ip_geo_ip,'') FROM nodes WHERE node_id='target'`).Scan(&geoIP); err != nil {
+	var hostJSON, geoIP string
+	if err := d.QueryRow(`SELECT COALESCE(last_host_json,''), COALESCE(ip_geo_ip,'') FROM nodes WHERE node_id='target'`).Scan(&hostJSON, &geoIP); err != nil {
 		t.Fatal(err)
 	}
-	if geoIP != "1.1.1.1" {
-		t.Fatalf("geolocation IP = %q, want latest report IP", geoIP)
+	if hostJSON != newJSON || geoIP != "1.1.1.1" {
+		t.Fatalf("last_host_json=%q ip_geo_ip=%q", hostJSON, geoIP)
 	}
 }
