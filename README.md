@@ -172,9 +172,10 @@ custom_dir = "/etc/net-probe/services.d"
 Provide the token in the environment when the timer runs, for example in a
 systemd drop-in or the shell that runs `net-probe`.
 
-Omit `[collect.egress_ip]` to use these defaults. Successful public egress IP
-values are cached in `/etc/net-probe/egress-ip-cache.json`; a provider failure
-does not stop the rest of the report from being sent.
+Omit `[collect.egress_ip]` to use these defaults. Within each IP family, the
+endpoints are ordered fallbacks tried in listed order; successful public egress
+IP values are cached in `/etc/net-probe/egress-ip-cache.json` with mode `0600`,
+and a provider failure does not stop the rest of the report from being sent.
 
 ## Panel geolocation configuration
 
@@ -449,8 +450,8 @@ custom_dir = "/etc/net-probe/services.d"
 
 在 timer 运行时通过环境变量提供 Token，例如在 systemd drop-in 文件或运行 `net-probe` 的 shell 中设置。
 
-省略 `[collect.egress_ip]` 时会使用这些默认值。成功获取的公网出口 IP 会缓存到
-`/etc/net-probe/egress-ip-cache.json`；单个 provider 失败不会阻止其余报告发送。
+省略 `[collect.egress_ip]` 时会使用这些默认值。每个 IP 地址族的 endpoints 都是按列出顺序尝试的回退链；成功获取的公网出口 IP 会以 `0600` 权限缓存到
+`/etc/net-probe/egress-ip-cache.json`，单个 provider 失败不会阻止其余报告发送。
 
 ### Panel 地理位置配置
 
