@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -19,7 +18,6 @@ import (
 	"github.com/s2005lg/net-probe/internal/panel/geo"
 	"github.com/s2005lg/net-probe/internal/panel/retention"
 	panelversion "github.com/s2005lg/net-probe/internal/panel/version"
-	"github.com/s2005lg/net-probe/internal/report"
 )
 
 var version = "dev"
@@ -37,6 +35,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("validate config: %v", err)
+	}
 	if cfg.DataDir == "" {
 		cfg.DataDir = "/var/lib/net-probe-panel"
 	}
@@ -48,6 +49,10 @@ func main() {
 	defer d.Close()
 	if err := db.Migrate(d); err != nil {
 		log.Fatalf("migrate db: %v", err)
+	}
+	refresher, err := newGeoRefresher(d, cfg)
+	if err != nil {
+		log.Fatalf("configure geolocation: %v", err)
 	}
 
 	var users int
@@ -74,9 +79,10 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	startBackground(ctx, d, cfg)
+	go refresher.Run(ctx)
+	startBackground(ctx, d, cfg, refresher)
 
-	server := api.New(d, cfg)
+	server := api.New(d, cfg, refresher)
 	server.ConfigPath = *cfgPath
 	log.Printf("net-probe-panel listening on %s", cfg.ListenAddr)
 	if err := http.ListenAndServeTLS(cfg.ListenAddr, certPath, keyPath, server.Routes()); err != nil {
@@ -84,7 +90,28 @@ func main() {
 	}
 }
 
-func startBackground(ctx context.Context, d *sql.DB, cfg *config.Config) {
+func newGeoRefresher(d *sql.DB, cfg *config.Config) (*geo.Refresher, error) {
+	var token string
+	if cfg.Geo.TokenEnv != "" {
+		token = os.Getenv(cfg.Geo.TokenEnv)
+		if token == "" {
+			return nil, fmt.Errorf("geo token env %q is empty", cfg.Geo.TokenEnv)
+		}
+	}
+	timeout, err := time.ParseDuration(cfg.Geo.Timeout)
+	if err != nil {
+		return nil, fmt.Errorf("parse geo timeout: %w", err)
+	}
+	freshness, err := time.ParseDuration(cfg.Geo.RefreshInterval)
+	if err != nil {
+		return nil, fmt.Errorf("parse geo freshness: %w", err)
+	}
+	client := geo.NewHTTPClient(timeout)
+	provider := geo.NewIPWhoisProvider(client, cfg.Geo.URL, token)
+	return geo.NewRefresher(d, provider, freshness, log.Printf), nil
+}
+
+func startBackground(ctx context.Context, d *sql.DB, cfg *config.Config, refresher *geo.Refresher) {
 	go runEvery(ctx, time.Hour, func(ctx context.Context) {
 		if err := retention.Aggregate(ctx, d, cfg.Retention.RawDays, cfg.Retention.HourlyDays, cfg.Retention.DailyDays); err != nil {
 			log.Printf("retention aggregation: %v", err)
@@ -96,8 +123,8 @@ func startBackground(ctx context.Context, d *sql.DB, cfg *config.Config) {
 		}
 	})
 	go runEvery(ctx, geoRefreshInterval(cfg), func(ctx context.Context) {
-		if err := refreshIPLocations(ctx, d); err != nil {
-			log.Printf("IP location refresh: %v", err)
+		if err := refresher.Reconcile(ctx); err != nil {
+			log.Printf("IP location reconciliation: %v", err)
 		}
 	})
 	go runEvery(ctx, 12*time.Hour, func(ctx context.Context) {
@@ -113,46 +140,6 @@ func geoRefreshInterval(cfg *config.Config) time.Duration {
 		return d
 	}
 	return 12 * time.Hour
-}
-
-func refreshIPLocations(ctx context.Context, d *sql.DB) error {
-	rows, err := d.QueryContext(ctx, `SELECT node_id, COALESCE(last_host_json,'{}') FROM nodes`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var nodeID, raw string
-		if err := rows.Scan(&nodeID, &raw); err != nil {
-			return err
-		}
-		var host report.Host
-		if err := json.Unmarshal([]byte(raw), &host); err != nil {
-			continue
-		}
-		ip := host.IPv4
-		if ip == "" {
-			ip = host.IPv6
-		}
-		if ip == "" {
-			continue
-		}
-		location, country, region, city := "内网", "", "", ""
-		if !geo.IsPrivateIP(ip) {
-			loc, err := geo.Lookup(ctx, ip)
-			if err != nil {
-				log.Printf("geo lookup %s: %v", ip, err)
-				continue
-			}
-			location, country, region, city = geo.Format(loc), loc.Country, loc.RegionName, loc.City
-		}
-		if _, err := d.ExecContext(ctx, `UPDATE nodes SET ip_location=?, ip_country=?, ip_region=?, ip_city=?, ip_geo_updated_at=? WHERE node_id=?`,
-			location, country, region, city, time.Now().Unix(), nodeID); err != nil {
-			return err
-		}
-	}
-	return rows.Err()
 }
 
 func runEvery(ctx context.Context, interval time.Duration, fn func(context.Context)) {

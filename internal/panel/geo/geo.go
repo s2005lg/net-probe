@@ -20,8 +20,6 @@ type Location struct {
 
 const maxResponseBody = 1 << 20
 
-const defaultIPWhoisURL = "https://ipwho.is/{ip}?lang=zh-CN"
-
 type Provider interface {
 	Lookup(context.Context, string) (Location, error)
 }
@@ -62,11 +60,6 @@ func NewHTTPClient(timeout time.Duration) *http.Client {
 			return nil
 		},
 	}
-}
-
-// Lookup preserves source compatibility until Panel startup injects a configured Provider.
-func Lookup(ctx context.Context, ip string) (Location, error) {
-	return NewIPWhoisProvider(NewHTTPClient(4*time.Second), defaultIPWhoisURL, "").Lookup(ctx, ip)
 }
 
 func safeRedirectTarget(u *url.URL) bool {

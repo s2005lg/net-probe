@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -8,16 +9,26 @@ import (
 
 	"github.com/s2005lg/net-probe/internal/panel/auth"
 	"github.com/s2005lg/net-probe/internal/panel/config"
+	"github.com/s2005lg/net-probe/internal/report"
 )
 
-type Server struct {
-	db         *sql.DB
-	cfg        *config.Config
-	ConfigPath string
+type NodeGeoObserver interface {
+	ObserveNode(context.Context, string, report.Host) error
 }
 
-func New(d *sql.DB, cfg *config.Config) *Server {
-	return &Server{db: d, cfg: cfg}
+type Server struct {
+	db          *sql.DB
+	cfg         *config.Config
+	geoObserver NodeGeoObserver
+	ConfigPath  string
+}
+
+func New(d *sql.DB, cfg *config.Config, observers ...NodeGeoObserver) *Server {
+	s := &Server{db: d, cfg: cfg}
+	if len(observers) > 0 {
+		s.geoObserver = observers[0]
+	}
+	return s
 }
 
 func (s *Server) Routes() http.Handler {
