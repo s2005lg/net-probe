@@ -19,7 +19,14 @@ func Migrate(d *sql.DB) error {
 	if _, err := d.Exec(schema); err != nil {
 		return err
 	}
-	return addMissingNodeColumns(d)
+	if err := addMissingNodeColumns(d); err != nil {
+		return err
+	}
+	if err := addMissingGeoCacheColumns(d); err != nil {
+		return err
+	}
+	_, err := d.Exec(`CREATE INDEX IF NOT EXISTS idx_nodes_ip_geo_ip ON nodes(ip_geo_ip)`)
+	return err
 }
 
 func addMissingNodeColumns(d *sql.DB) error {
@@ -48,11 +55,34 @@ func addMissingNodeColumns(d *sql.DB) error {
 	return nil
 }
 
+func addMissingGeoCacheColumns(d *sql.DB) error {
+	for _, col := range []struct {
+		name string
+		def  string
+	}{
+		{name: "last_attempt_at", def: "INTEGER NOT NULL DEFAULT 0"},
+		{name: "failure_count", def: "INTEGER NOT NULL DEFAULT 0"},
+		{name: "retry_at", def: "INTEGER NOT NULL DEFAULT 0"},
+	} {
+		var count int
+		if err := d.QueryRow(`SELECT count(*) FROM pragma_table_info('ip_geo_cache') WHERE name=?`, col.name).Scan(&count); err != nil {
+			return err
+		}
+		if count > 0 {
+			continue
+		}
+		if _, err := d.Exec(`ALTER TABLE ip_geo_cache ADD COLUMN ` + col.name + ` ` + col.def); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 const schema = `
 CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, username TEXT UNIQUE, password_hash TEXT, created_at INTEGER);
 CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user_id INTEGER, created_at INTEGER, expires_at INTEGER);
 CREATE TABLE IF NOT EXISTS nodes(id INTEGER PRIMARY KEY, node_id TEXT UNIQUE, alias TEXT, token TEXT, muted_until INTEGER, last_report_at INTEGER, last_host_json TEXT, last_services_json TEXT, created_at INTEGER, updated_at INTEGER, ip_geo_ip TEXT, ip_location TEXT, ip_country TEXT, ip_region TEXT, ip_city TEXT, ip_geo_updated_at INTEGER);
-CREATE TABLE IF NOT EXISTS ip_geo_cache(ip TEXT PRIMARY KEY, location TEXT, country TEXT, region TEXT, city TEXT, updated_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS ip_geo_cache(ip TEXT PRIMARY KEY, location TEXT, country TEXT, region TEXT, city TEXT, updated_at INTEGER NOT NULL, last_attempt_at INTEGER NOT NULL DEFAULT 0, failure_count INTEGER NOT NULL DEFAULT 0, retry_at INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS tags(id INTEGER PRIMARY KEY, name TEXT UNIQUE);
 CREATE TABLE IF NOT EXISTS node_tags(node_id INTEGER, tag_id INTEGER, PRIMARY KEY(node_id, tag_id));
 CREATE TABLE IF NOT EXISTS metrics(id INTEGER PRIMARY KEY AUTOINCREMENT, node_id TEXT, ts INTEGER, granularity TEXT, load1 REAL, load5 REAL, load15 REAL, mem_used_pct REAL, disk_used_pct REAL, services_json TEXT);

@@ -13,8 +13,11 @@ import (
 const maxCacheBytes = 4 * 1024
 
 type cacheEntry struct {
-	Address    string    `json:"address,omitempty"`
-	ObservedAt time.Time `json:"observed_at,omitempty"`
+	Address       string    `json:"address,omitempty"`
+	ObservedAt    time.Time `json:"observed_at,omitempty"`
+	LastAttemptAt int64     `json:"last_attempt_at,omitempty"`
+	FailureCount  int       `json:"failure_count,omitempty"`
+	RetryAt       int64     `json:"retry_at,omitempty"`
 }
 
 type cacheFile struct {
@@ -53,6 +56,9 @@ func readCache(path string) (cacheFile, error) {
 }
 
 func validateCacheEntry(entry cacheEntry, family Family) error {
+	if entry.FailureCount < 0 || entry.LastAttemptAt < 0 || entry.RetryAt < 0 {
+		return fmt.Errorf("egress IP cache contains invalid %s retry state", familyName(family))
+	}
 	if entry.Address == "" {
 		return nil
 	}

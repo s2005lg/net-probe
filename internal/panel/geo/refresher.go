@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/s2005lg/net-probe/internal/report"
+	"github.com/s2005lg/net-probe/internal/retrybackoff"
 )
 
 const refreshQueueCapacity = 128
@@ -174,79 +175,130 @@ func (r *Refresher) reconcileNodes(ctx context.Context) ([]reconcileNode, error)
 
 func (r *Refresher) enqueue(ip string) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if _, ok := r.pending[ip]; ok {
 		if _, processing := r.processing[ip]; processing {
 			r.dirty[ip] = struct{}{}
 		}
+		r.mu.Unlock()
 		return
 	}
 	r.pending[ip] = struct{}{}
 	select {
 	case r.queue <- ip:
+		r.mu.Unlock()
 	default:
 		delete(r.pending, ip)
+		r.mu.Unlock()
+		r.logf("geolocation refresh queue full; refresh deferred")
 	}
 }
 
 func (r *Refresher) finishProcessing(ip string) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	delete(r.processing, ip)
 	if _, rerun := r.dirty[ip]; !rerun {
 		delete(r.pending, ip)
+		r.mu.Unlock()
 		return
 	}
 	delete(r.dirty, ip)
 	select {
 	case r.queue <- ip:
+		r.mu.Unlock()
 	default:
 		delete(r.pending, ip)
+		r.mu.Unlock()
+		r.logf("geolocation refresh queue full; refresh deferred")
 	}
 }
 
 func (r *Refresher) refreshOne(ctx context.Context, ip string) error {
 	now := r.now()
-	location, loc, updatedAt, found, err := r.cachedLocation(ctx, ip)
+	cached, found, err := r.cachedLocation(ctx, ip)
 	if err != nil {
 		return err
 	}
-	if !found || time.Unix(updatedAt, 0).Add(r.ttl).Before(now) {
-		loc, err = r.provider.Lookup(ctx, ip)
-		if err != nil {
-			return errors.New("geolocation provider lookup failed")
+	if found && cached.UpdatedAt > 0 {
+		if err := r.applyLocation(ctx, ip, cached); err != nil {
+			return err
 		}
-		location = Format(loc)
-		updatedAt = now.Unix()
-		if _, err := r.db.ExecContext(ctx, `INSERT INTO ip_geo_cache(ip,location,country,region,city,updated_at)
-VALUES(?,?,?,?,?,?)
+		if !time.Unix(cached.UpdatedAt, 0).Add(r.ttl).Before(now) {
+			return nil
+		}
+	}
+	if found && cached.RetryAt > now.Unix() {
+		return nil
+	}
+
+	loc, err := r.provider.Lookup(ctx, ip)
+	if err != nil {
+		if err := r.persistFailure(ctx, ip, cached, now); err != nil {
+			return err
+		}
+		return errors.New("geolocation provider lookup failed")
+	}
+	cached = geoCacheEntry{
+		Location:      Format(loc),
+		LocationParts: loc,
+		UpdatedAt:     now.Unix(),
+		LastAttemptAt: now.Unix(),
+	}
+	if _, err := r.db.ExecContext(ctx, `INSERT INTO ip_geo_cache(ip,location,country,region,city,updated_at,last_attempt_at,failure_count,retry_at)
+VALUES(?,?,?,?,?,?,?,?,?)
 ON CONFLICT(ip) DO UPDATE SET
 location=excluded.location,
 country=excluded.country,
 region=excluded.region,
 city=excluded.city,
-updated_at=excluded.updated_at`, ip, location, loc.Country, loc.RegionName, loc.City, updatedAt); err != nil {
-			return err
-		}
+updated_at=excluded.updated_at,
+last_attempt_at=excluded.last_attempt_at,
+failure_count=0,
+retry_at=0`, ip, cached.Location, loc.Country, loc.RegionName, loc.City, cached.UpdatedAt, cached.LastAttemptAt, 0, 0); err != nil {
+		return err
 	}
+	return r.applyLocation(ctx, ip, cached)
+}
 
-	_, err = r.db.ExecContext(ctx, `UPDATE nodes
+type geoCacheEntry struct {
+	Location      string
+	LocationParts Location
+	UpdatedAt     int64
+	LastAttemptAt int64
+	FailureCount  int
+	RetryAt       int64
+}
+
+func (r *Refresher) applyLocation(ctx context.Context, ip string, cached geoCacheEntry) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE nodes
 SET ip_location=?, ip_country=?, ip_region=?, ip_city=?, ip_geo_updated_at=?
-WHERE ip_geo_ip=?`, location, loc.Country, loc.RegionName, loc.City, updatedAt, ip)
+WHERE ip_geo_ip=?`, cached.Location, cached.LocationParts.Country, cached.LocationParts.RegionName, cached.LocationParts.City, cached.UpdatedAt, ip)
 	return err
 }
 
-func (r *Refresher) cachedLocation(ctx context.Context, ip string) (string, Location, int64, bool, error) {
-	var location string
-	var loc Location
-	var updatedAt int64
-	err := r.db.QueryRowContext(ctx, `SELECT COALESCE(location,''), COALESCE(country,''), COALESCE(region,''), COALESCE(city,''), updated_at
-FROM ip_geo_cache WHERE ip=?`, ip).Scan(&location, &loc.Country, &loc.RegionName, &loc.City, &updatedAt)
+func (r *Refresher) persistFailure(ctx context.Context, ip string, cached geoCacheEntry, now time.Time) error {
+	if cached.FailureCount < 32 {
+		cached.FailureCount++
+	}
+	cached.LastAttemptAt = now.Unix()
+	cached.RetryAt = now.Add(retrybackoff.Delay(cached.FailureCount)).Unix()
+	_, err := r.db.ExecContext(ctx, `INSERT INTO ip_geo_cache(ip,location,country,region,city,updated_at,last_attempt_at,failure_count,retry_at)
+VALUES(?,'','','','',0,?,?,?)
+ON CONFLICT(ip) DO UPDATE SET
+last_attempt_at=excluded.last_attempt_at,
+failure_count=excluded.failure_count,
+retry_at=excluded.retry_at`, ip, cached.LastAttemptAt, cached.FailureCount, cached.RetryAt)
+	return err
+}
+
+func (r *Refresher) cachedLocation(ctx context.Context, ip string) (geoCacheEntry, bool, error) {
+	var cached geoCacheEntry
+	err := r.db.QueryRowContext(ctx, `SELECT COALESCE(location,''), COALESCE(country,''), COALESCE(region,''), COALESCE(city,''), updated_at, last_attempt_at, failure_count, retry_at
+FROM ip_geo_cache WHERE ip=?`, ip).Scan(&cached.Location, &cached.LocationParts.Country, &cached.LocationParts.RegionName, &cached.LocationParts.City, &cached.UpdatedAt, &cached.LastAttemptAt, &cached.FailureCount, &cached.RetryAt)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", Location{}, 0, false, nil
+		return geoCacheEntry{}, false, nil
 	}
 	if err != nil {
-		return "", Location{}, 0, false, err
+		return geoCacheEntry{}, false, err
 	}
-	return location, loc, updatedAt, true, nil
+	return cached, true, nil
 }

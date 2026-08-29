@@ -101,25 +101,34 @@ func hysteria2Telemetry(ctx context.Context, endpoint, secret string) TelemetryR
 }
 
 func hysteria2Traffic(ctx context.Context, endpoint, secret string) (*report.TrafficTelemetry, error) {
-	txRx := map[string]struct {
-		Tx uint64 `json:"tx"`
-		Rx uint64 `json:"rx"`
-	}{}
+	var txRx map[string]struct {
+		Tx *uint64 `json:"tx"`
+		Rx *uint64 `json:"rx"`
+	}
 	if err := getStatsJSON(ctx, endpoint+"/traffic", secret, &txRx); err != nil {
 		return nil, err
 	}
+	if txRx == nil {
+		return nil, invalidTelemetryResponse()
+	}
 	var tx, rx uint64
 	for _, v := range txRx {
-		tx += v.Tx
-		rx += v.Rx
+		if v.Tx == nil || v.Rx == nil {
+			return nil, invalidTelemetryResponse()
+		}
+		tx += *v.Tx
+		rx += *v.Rx
 	}
 	return &report.TrafficTelemetry{State: report.ObservationOK, TxBytes: uint64Ptr(tx), RxBytes: uint64Ptr(rx)}, nil
 }
 
 func hysteria2OnlineClients(ctx context.Context, endpoint, secret string) (*report.CountTelemetry, error) {
-	online := map[string]uint64{}
+	var online map[string]uint64
 	if err := getStatsJSON(ctx, endpoint+"/online", secret, &online); err != nil {
 		return nil, err
+	}
+	if online == nil {
+		return nil, invalidTelemetryResponse()
 	}
 	var total uint64
 	for _, n := range online {
@@ -135,8 +144,8 @@ func singBoxTelemetry(ctx context.Context, endpoint, secret string) TelemetryRes
 		authHeader = "Bearer " + secret
 	}
 	v := struct {
-		Up   uint64 `json:"up"`
-		Down uint64 `json:"down"`
+		Up   *uint64 `json:"up"`
+		Down *uint64 `json:"down"`
 	}{}
 	if err := getStatsJSON(ctx, endpoint+"/traffic", authHeader, &v); err != nil {
 		return TelemetryResult{
@@ -144,8 +153,15 @@ func singBoxTelemetry(ctx context.Context, endpoint, secret string) TelemetryRes
 			Diagnostics: []TelemetryDiagnostic{{Metric: "traffic", Err: err}},
 		}
 	}
+	if v.Up == nil || v.Down == nil {
+		err := invalidTelemetryResponse()
+		return TelemetryResult{
+			Telemetry:   &report.ServiceTelemetry{Traffic: observationError(errorCode(err))},
+			Diagnostics: []TelemetryDiagnostic{{Metric: "traffic", Err: err}},
+		}
+	}
 	return TelemetryResult{Telemetry: &report.ServiceTelemetry{
-		Traffic: &report.TrafficTelemetry{State: report.ObservationOK, TxBytes: uint64Ptr(v.Up), RxBytes: uint64Ptr(v.Down)},
+		Traffic: &report.TrafficTelemetry{State: report.ObservationOK, TxBytes: uint64Ptr(*v.Up), RxBytes: uint64Ptr(*v.Down)},
 	}}
 }
 
@@ -174,18 +190,31 @@ func xrayTraffic(ctx context.Context, r Runner, server string) (*report.TrafficT
 		return nil, &telemetryError{code: "command_failed", err: err}
 	}
 	var tx, rx uint64
+	recognized := 0
 	for _, line := range strings.Split(out, "\n") {
-		f := strings.Fields(line)
-		if len(f) < 2 {
+		isUplink := strings.Contains(line, "uplink")
+		isDownlink := strings.Contains(line, "downlink")
+		if !isUplink && !isDownlink {
 			continue
 		}
-		v, _ := strconv.ParseUint(f[len(f)-1], 10, 64)
-		if strings.Contains(line, "uplink") {
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			return nil, invalidTelemetryResponse()
+		}
+		v, err := strconv.ParseUint(f[len(f)-1], 10, 64)
+		if err != nil || isUplink == isDownlink {
+			return nil, invalidTelemetryResponse()
+		}
+		recognized++
+		if isUplink {
 			tx += v
 		}
-		if strings.Contains(line, "downlink") {
+		if isDownlink {
 			rx += v
 		}
+	}
+	if recognized == 0 {
+		return nil, invalidTelemetryResponse()
 	}
 	return &report.TrafficTelemetry{State: report.ObservationOK, TxBytes: uint64Ptr(tx), RxBytes: uint64Ptr(rx)}, nil
 }
@@ -196,8 +225,8 @@ func xrayOnlineClients(ctx context.Context, r Runner, server string) (*report.Co
 		return nil, &telemetryError{code: "command_failed", err: err}
 	}
 	var resp struct {
-		Users []struct {
-			IPs []struct {
+		Users *[]struct {
+			IPs *[]struct {
 				IP string `json:"ip"`
 			} `json:"ips"`
 		} `json:"users"`
@@ -205,9 +234,20 @@ func xrayOnlineClients(ctx context.Context, r Runner, server string) (*report.Co
 	if err := json.Unmarshal([]byte(out), &resp); err != nil {
 		return nil, &telemetryError{code: "invalid_response", err: err}
 	}
+	if resp.Users == nil {
+		return nil, invalidTelemetryResponse()
+	}
 	var total uint64
-	for _, u := range resp.Users {
-		total += uint64(len(u.IPs))
+	for _, u := range *resp.Users {
+		if u.IPs == nil {
+			return nil, invalidTelemetryResponse()
+		}
+		for _, ip := range *u.IPs {
+			if strings.TrimSpace(ip.IP) == "" {
+				return nil, invalidTelemetryResponse()
+			}
+			total++
+		}
 	}
 	return &report.CountTelemetry{State: report.ObservationOK, Value: uint64Ptr(total)}, nil
 }
@@ -221,6 +261,10 @@ func countObservationError(code string) *report.CountTelemetry {
 }
 
 func uint64Ptr(v uint64) *uint64 { return &v }
+
+func invalidTelemetryResponse() error {
+	return &telemetryError{code: "invalid_response", err: errors.New("invalid telemetry response")}
+}
 
 func errorCode(err error) string {
 	if errors.Is(err, context.DeadlineExceeded) {

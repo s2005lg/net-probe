@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/s2005lg/net-probe/internal/urlpolicy"
 )
 
 type Sink struct {
@@ -149,21 +150,11 @@ func validateEgressEndpoints(family string, endpoints []string) error {
 		if err != nil || u.Scheme == "" || u.Hostname() == "" {
 			return fmt.Errorf("egress %s endpoint %d is invalid", family, i)
 		}
-		scheme := strings.ToLower(u.Scheme)
-		if scheme != "https" && !(scheme == "http" && isLocalHost(u.Hostname())) {
+		if !urlpolicy.IsSecureEndpoint(u) {
 			return fmt.Errorf("egress %s endpoint %d must use https (or local http)", family, i)
 		}
 	}
 	return nil
-}
-
-func isLocalHost(hostname string) bool {
-	switch strings.ToLower(hostname) {
-	case "localhost", "127.0.0.1", "::1":
-		return true
-	default:
-		return false
-	}
 }
 
 func ResolveToken(s Sink) (string, error) {

@@ -97,7 +97,7 @@ export default function NodeDetailPage() {
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <InfoCard label="主机名" value={host.hostname} />
         <InfoCard label="系统" value={[host.os, host.kernel, host.arch].filter(Boolean).join(" ")} />
-        <InfoCard label="出口 IP" value={egressIP(host)} />
+        <InfoCard label="出口 IP" value={egressIP(host, node.effective_ip)} />
         <InfoCard label="国家/地区" value={node.ip_location || "—"} />
         <InfoCard label="运行时长" value={formatUptime(host.uptime_seconds)} />
       </div>

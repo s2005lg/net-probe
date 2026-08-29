@@ -68,6 +68,22 @@ func TestReadCacheMissingReturnsEmpty(t *testing.T) {
 	}
 }
 
+func TestReadCacheKeepsLegacySuccessOnlyShapeCompatible(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-cache.json")
+	if err := os.WriteFile(path, []byte(`{"ipv4":{"address":"8.8.8.8","observed_at":"2026-08-28T01:02:03Z"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readCache(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTime := time.Date(2026, 8, 28, 1, 2, 3, 0, time.UTC)
+	if got.IPv4.Address != "8.8.8.8" || !got.IPv4.ObservedAt.Equal(wantTime) ||
+		got.IPv4.LastAttemptAt != 0 || got.IPv4.FailureCount != 0 || got.IPv4.RetryAt != 0 {
+		t.Fatalf("legacy cache = %+v", got)
+	}
+}
+
 func TestWriteCacheAtomicallyReplacesExistingFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "egress-ip-cache.json")

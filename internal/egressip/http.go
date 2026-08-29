@@ -8,6 +8,9 @@ import (
 	"net/netip"
 	"strings"
 	"time"
+
+	"github.com/s2005lg/net-probe/internal/netaddr"
+	"github.com/s2005lg/net-probe/internal/urlpolicy"
 )
 
 const maxResponseBytes = 64
@@ -32,6 +35,9 @@ func NewHTTPClient(timeout time.Duration) *http.Client {
 			}
 			if len(via) > 0 && via[len(via)-1].URL.Scheme == "https" && req.URL.Scheme == "http" {
 				return fmt.Errorf("egress IP discovery rejects HTTPS-to-HTTP redirects")
+			}
+			if !urlpolicy.IsSecureEndpoint(req.URL) {
+				return fmt.Errorf("egress IP discovery redirect target rejected")
 			}
 			return nil
 		},
@@ -105,10 +111,5 @@ func matchesFamily(addr netip.Addr, family Family) bool {
 }
 
 func isPublic(addr netip.Addr) bool {
-	return addr.IsGlobalUnicast() &&
-		!addr.IsPrivate() &&
-		!addr.IsLoopback() &&
-		!addr.IsLinkLocalUnicast() &&
-		!addr.IsMulticast() &&
-		!addr.IsUnspecified()
+	return netaddr.IsPublic(addr)
 }

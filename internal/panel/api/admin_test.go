@@ -43,6 +43,41 @@ func TestNodesList(t *testing.T) {
 	}
 }
 
+func TestNodeAPIEffectiveIP(t *testing.T) {
+	tests := []struct {
+		name     string
+		hostJSON string
+		want     string
+	}{
+		{name: "malformed egress fallback", hostJSON: `{"egress_ipv4":"bad","egress_ipv6":"2001:4860:4860::8888"}`, want: "2001:4860:4860::8888"},
+		{name: "family mismatch fallback", hostJSON: `{"egress_ipv4":"2001:4860:4860::8888","ipv4":"1.1.1.1"}`, want: "1.1.1.1"},
+		{name: "mapped IPv4 canonicalization", hostJSON: `{"egress_ipv4":"::ffff:8.8.8.8"}`, want: "8.8.8.8"},
+		{name: "legacy fallback", hostJSON: `{"ipv4":"1.1.1.1"}`, want: "1.1.1.1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d, cfg := openTestDB(t)
+			insertTestNode(t, d, "n1", "edge", tt.hostJSON, `[]`, time.Now().Unix())
+			s := New(d, cfg)
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/nodes/n1", nil)
+			req.SetPathValue("id", "n1")
+			rr := httptest.NewRecorder()
+			s.handleNodeDetail(rr, req)
+			if rr.Code != http.StatusOK {
+				t.Fatalf("code=%d body=%s", rr.Code, rr.Body.String())
+			}
+			var out map[string]any
+			if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+				t.Fatal(err)
+			}
+			if got := out["effective_ip"]; got != tt.want {
+				t.Fatalf("effective_ip=%v, want %q; body=%s", got, tt.want, rr.Body.String())
+			}
+		})
+	}
+}
+
 func TestNodeDetailPatchDelete(t *testing.T) {
 	d, cfg := openTestDB(t)
 	now := time.Now().Unix()
@@ -102,7 +137,7 @@ func TestNodeMetrics(t *testing.T) {
 	now := time.Now().Unix()
 	insertTestNode(t, d, "n1", "edge", `{"hostname":"h1"}`, `[{"type":"xray"}]`, now)
 	if _, err := d.Exec(`INSERT INTO metrics(node_id,ts,granularity,load1,load5,load15,mem_used_pct,disk_used_pct,services_json)
-		VALUES('n1',?,'raw',0.1,0.2,0.3,12,20,'[]')`, now); err != nil {
+		VALUES('n1',?,'raw',0.1,0.2,0.3,12,20,'[{"type":"xray","capabilities":{"traffic":{"support":"supported"}}}]')`, now); err != nil {
 		t.Fatalf("insert metric: %v", err)
 	}
 	s := New(d, cfg)
@@ -120,6 +155,10 @@ func TestNodeMetrics(t *testing.T) {
 	}
 	if len(out) != 1 || out[0]["granularity"] != "raw" {
 		t.Fatalf("metrics=%+v", out)
+	}
+	services, ok := out[0]["services_json"].([]any)
+	if !ok || len(services) != 1 {
+		t.Fatalf("services_json wire shape = %#v, want JSON array", out[0]["services_json"])
 	}
 }
 

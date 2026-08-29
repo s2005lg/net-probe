@@ -54,7 +54,10 @@ func TestResolverRetriesStaleCacheAndKeepsItOnFailure(t *testing.T) {
 		t.Fatalf("result=%+v calls=%d", got, calls)
 	}
 	cache, err := readCache(path)
-	want := cacheEntry{Address: "8.8.8.8", ObservedAt: now.Add(-7 * time.Hour)}
+	want := cacheEntry{
+		Address: "8.8.8.8", ObservedAt: now.Add(-7 * time.Hour), LastAttemptAt: now.Unix(),
+		FailureCount: 1, RetryAt: now.Add(5 * time.Minute).Unix(),
+	}
 	if err != nil || cache.IPv4 != want {
 		t.Fatalf("cache = %+v, err = %v", cache, err)
 	}
@@ -148,7 +151,7 @@ func TestResolverRecoversFromCorruptCache(t *testing.T) {
 		t.Fatalf("result = %+v", got)
 	}
 	cache, err := readCache(path)
-	if err != nil || cache.IPv4 != (cacheEntry{Address: "8.8.8.8", ObservedAt: now}) {
+	if err != nil || cache.IPv4 != (cacheEntry{Address: "8.8.8.8", ObservedAt: now, LastAttemptAt: now.Unix()}) {
 		t.Fatalf("cache = %+v, err = %v", cache, err)
 	}
 }
@@ -170,7 +173,7 @@ func TestResolverReplacesSuccessfulStaleEntry(t *testing.T) {
 		t.Fatalf("result = %+v", got)
 	}
 	cache, err := readCache(path)
-	if err != nil || cache.IPv4 != (cacheEntry{Address: "1.1.1.1", ObservedAt: now}) {
+	if err != nil || cache.IPv4 != (cacheEntry{Address: "1.1.1.1", ObservedAt: now, LastAttemptAt: now.Unix()}) {
 		t.Fatalf("cache = %+v, err = %v", cache, err)
 	}
 }
@@ -274,5 +277,65 @@ func TestResolverLogsOnlySafeFamilyAndCategory(t *testing.T) {
 		if strings.Contains(joined, secret) {
 			t.Fatalf("logs exposed %q: %q", secret, logs)
 		}
+	}
+}
+
+func TestResolverPersistsSingleStackFailureBackoffAndEventuallyRetries(t *testing.T) {
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	path := filepath.Join(t.TempDir(), "cache.json")
+	var mu sync.Mutex
+	calls := map[Family]int{}
+	discover := func(_ context.Context, family Family, _ []string) (string, error) {
+		mu.Lock()
+		calls[family]++
+		call := calls[family]
+		mu.Unlock()
+		if family == IPv4 {
+			return "8.8.8.8", nil
+		}
+		if call < 3 {
+			return "", errors.New("IPv6 unavailable")
+		}
+		return "2001:4860:4860::8888", nil
+	}
+	resolve := func() Result {
+		// A fresh Resolver models the normal one-shot Agent process restart.
+		return (Resolver{Now: func() time.Time { return now }, Discover: discover}).Resolve(context.Background(), Options{
+			Enabled: true, RefreshInterval: 6 * time.Hour, Timeout: time.Second, CachePath: path,
+			IPv4Endpoints: []string{"https://v4.test/ip"}, IPv6Endpoints: []string{"https://v6.test/ip"},
+		})
+	}
+
+	if got := resolve(); got != (Result{IPv4: "8.8.8.8"}) {
+		t.Fatalf("initial result = %+v", got)
+	}
+	now = now.Add(time.Minute)
+	if got := resolve(); got != (Result{IPv4: "8.8.8.8"}) {
+		t.Fatalf("one-minute result = %+v", got)
+	}
+	mu.Lock()
+	if calls[IPv4] != 1 || calls[IPv6] != 1 {
+		t.Fatalf("calls after one minute = %v", calls)
+	}
+	mu.Unlock()
+
+	now = now.Add(4 * time.Minute)
+	resolve() // first retry at five minutes; second IPv6 failure doubles the delay
+	now = now.Add(9 * time.Minute)
+	resolve()
+	mu.Lock()
+	if calls[IPv6] != 2 {
+		t.Fatalf("calls before doubled retry = %v", calls)
+	}
+	mu.Unlock()
+
+	now = now.Add(time.Minute)
+	if got := resolve(); got != (Result{IPv4: "8.8.8.8", IPv6: "2001:4860:4860::8888"}) {
+		t.Fatalf("eventual retry result = %+v", got)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls[IPv4] != 1 || calls[IPv6] != 3 {
+		t.Fatalf("final calls = %v", calls)
 	}
 }

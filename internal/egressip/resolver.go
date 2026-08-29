@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/s2005lg/net-probe/internal/retrybackoff"
 )
 
 type Options struct {
@@ -85,9 +87,17 @@ func (r Resolver) Resolve(ctx context.Context, opts Options) Result {
 		refresh := <-results
 		if refresh.err != nil {
 			logSafe(opts.Logf, "egress IP refresh family=%s category=%s", familyName(refresh.family), errorCategory(refresh.err))
+			entry := cacheEntryForFamily(cache, refresh.family)
+			entry.LastAttemptAt = now.Unix()
+			if entry.FailureCount < 32 {
+				entry.FailureCount++
+			}
+			entry.RetryAt = now.Add(retrybackoff.Delay(entry.FailureCount)).Unix()
+			setCacheEntryForFamily(&cache, refresh.family, entry)
+			dirty = true
 			continue
 		}
-		entry := cacheEntry{Address: refresh.address, ObservedAt: now}
+		entry := cacheEntry{Address: refresh.address, ObservedAt: now, LastAttemptAt: now.Unix()}
 		switch refresh.family {
 		case IPv4:
 			cache.IPv4 = entry
@@ -107,10 +117,28 @@ func (r Resolver) Resolve(ctx context.Context, opts Options) Result {
 }
 
 func needsRefresh(entry cacheEntry, now time.Time, interval time.Duration) bool {
+	if entry.RetryAt > now.Unix() {
+		return false
+	}
 	if entry.Address == "" || entry.ObservedAt.IsZero() {
 		return true
 	}
 	return !now.Before(entry.ObservedAt.Add(interval))
+}
+
+func cacheEntryForFamily(cache cacheFile, family Family) cacheEntry {
+	if family == IPv6 {
+		return cache.IPv6
+	}
+	return cache.IPv4
+}
+
+func setCacheEntryForFamily(cache *cacheFile, family Family, entry cacheEntry) {
+	if family == IPv6 {
+		cache.IPv6 = entry
+		return
+	}
+	cache.IPv4 = entry
 }
 
 func errorCategory(err error) string {

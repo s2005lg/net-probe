@@ -13,6 +13,14 @@ function host(overrides: Partial<Host>): Host {
 }
 
 describe("egressIP", () => {
+  it("uses the Panel canonical effective address", () => {
+    expect(egressIP(host({ egress_ipv4: "untrusted" }), "8.8.8.8")).toBe("8.8.8.8");
+  });
+
+  it("does not revive malformed host data when the Panel provides an empty canonical address", () => {
+    expect(egressIP(host({ egress_ipv4: "not-an-ip" }), "")).toBe("—");
+  });
+
   it("prefers discovered IPv4 over all other addresses", () => {
     expect(egressIP(host({ egress_ipv4: "8.8.8.8", egress_ipv6: "2001:4860:4860::8888", ipv4: "10.0.0.2" }))).toBe("8.8.8.8");
   });
@@ -22,5 +30,9 @@ describe("egressIP", () => {
     expect(egressIP(host({ ipv4: "1.1.1.1", ipv6: "2001:4860:4860::8888" }))).toBe("1.1.1.1");
     expect(egressIP(host({ ipv6: "2001:4860:4860::8888" }))).toBe("2001:4860:4860::8888");
     expect(egressIP(host({}))).toBe("—");
+  });
+
+  it("keeps the old Panel response fallback when effective_ip is absent", () => {
+    expect(egressIP(host({ egress_ipv4: "8.8.4.4" }), undefined)).toBe("8.8.4.4");
   });
 });

@@ -31,6 +31,29 @@ type retryProvider struct {
 	location Location
 }
 
+type backoffProvider struct {
+	mu       sync.Mutex
+	calls    int
+	failures int
+	location Location
+}
+
+func (p *backoffProvider) Lookup(context.Context, string) (Location, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.calls++
+	if p.calls <= p.failures {
+		return Location{}, errors.New("provider unavailable")
+	}
+	return p.location, nil
+}
+
+func (p *backoffProvider) callCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
+}
+
 func (p *retryProvider) Lookup(context.Context, string) (Location, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -174,6 +197,56 @@ func TestRefreshOneReusesPersistentCache(t *testing.T) {
 	}
 	if location != "缓存显示值" || country != "美国" || region != "加利福尼亚州" || city != "山景城" {
 		t.Fatalf("location fields = %q %q %q %q", location, country, region, city)
+	}
+}
+
+func TestRefreshOnePersistsFailureBackoffAcrossRefresherRestarts(t *testing.T) {
+	d := openGeoTestDB(t)
+	insertNode(t, d, "n1", report.Host{EgressIPv4: "8.8.8.8"})
+	if _, err := d.Exec(`UPDATE nodes SET ip_geo_ip='8.8.8.8' WHERE node_id='n1'`); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	p := &backoffProvider{failures: 2, location: Location{Country: "美国", City: "山景城"}}
+	refresh := func() error {
+		r := NewRefresher(d, p, 12*time.Hour, nil)
+		r.now = func() time.Time { return now }
+		return r.refreshOne(context.Background(), "8.8.8.8")
+	}
+
+	if err := refresh(); err == nil {
+		t.Fatal("first provider failure returned nil")
+	}
+	var updatedAt, failureCount, retryAt int64
+	if err := d.QueryRow(`SELECT updated_at, failure_count, retry_at FROM ip_geo_cache WHERE ip='8.8.8.8'`).Scan(&updatedAt, &failureCount, &retryAt); err != nil {
+		t.Fatal(err)
+	}
+	if updatedAt != 0 || failureCount != 1 || retryAt != now.Add(5*time.Minute).Unix() {
+		t.Fatalf("failure state = updated_at:%d count:%d retry_at:%d", updatedAt, failureCount, retryAt)
+	}
+
+	now = now.Add(time.Minute)
+	if err := refresh(); err != nil || p.callCount() != 1 {
+		t.Fatalf("one-minute refresh error=%v calls=%d", err, p.callCount())
+	}
+	now = now.Add(4 * time.Minute)
+	if err := refresh(); err == nil || p.callCount() != 2 {
+		t.Fatalf("first retry error=%v calls=%d", err, p.callCount())
+	}
+	now = now.Add(9 * time.Minute)
+	if err := refresh(); err != nil || p.callCount() != 2 {
+		t.Fatalf("before doubled retry error=%v calls=%d", err, p.callCount())
+	}
+	now = now.Add(time.Minute)
+	if err := refresh(); err != nil || p.callCount() != 3 {
+		t.Fatalf("eventual retry error=%v calls=%d", err, p.callCount())
+	}
+	var location string
+	if err := d.QueryRow(`SELECT location, updated_at, failure_count, retry_at FROM ip_geo_cache WHERE ip='8.8.8.8'`).Scan(&location, &updatedAt, &failureCount, &retryAt); err != nil {
+		t.Fatal(err)
+	}
+	if location != "美国-山景城" || updatedAt != now.Unix() || failureCount != 0 || retryAt != 0 {
+		t.Fatalf("successful state = location:%q updated_at:%d count:%d retry_at:%d", location, updatedAt, failureCount, retryAt)
 	}
 }
 
@@ -409,13 +482,16 @@ func TestQueueDeduplicatesPendingIP(t *testing.T) {
 }
 
 func TestQueueSaturationIsNonBlockingAndRetryable(t *testing.T) {
-	r := NewRefresher(nil, nil, 12*time.Hour, nil)
+	var logs []string
+	r := NewRefresher(nil, nil, 12*time.Hour, func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	})
 	for i := 0; i < cap(r.queue); i++ {
 		r.enqueue(fmt.Sprintf("ip-%d", i))
 	}
 	done := make(chan struct{})
 	go func() {
-		r.enqueue("overflow")
+		r.enqueue("secret-provider-body-or-token")
 		close(done)
 	}()
 	select {
@@ -424,18 +500,25 @@ func TestQueueSaturationIsNonBlockingAndRetryable(t *testing.T) {
 		t.Fatal("enqueue blocked on a full queue")
 	}
 	r.mu.Lock()
-	_, pending := r.pending["overflow"]
+	_, pending := r.pending["secret-provider-body-or-token"]
 	r.mu.Unlock()
 	if pending {
 		t.Fatal("overflow IP retained a pending marker")
 	}
+	joined := strings.Join(logs, "\n")
+	if !strings.Contains(joined, "queue") || !strings.Contains(joined, "full") {
+		t.Fatalf("overflow logs = %q", logs)
+	}
+	if strings.Contains(joined, "secret-provider-body-or-token") {
+		t.Fatalf("overflow log exposed queued value: %q", joined)
+	}
 	<-r.queue
-	r.enqueue("overflow")
+	r.enqueue("secret-provider-body-or-token")
 	if len(r.queue) != cap(r.queue) {
 		t.Fatalf("queue length after retry = %d", len(r.queue))
 	}
 	r.mu.Lock()
-	_, pending = r.pending["overflow"]
+	_, pending = r.pending["secret-provider-body-or-token"]
 	r.mu.Unlock()
 	if !pending {
 		t.Fatal("overflow IP was not queued after capacity became available")
@@ -594,6 +677,13 @@ func TestRunRetriesObservationArrivingBeforePendingCleanup(t *testing.T) {
 			<-resume
 		})
 	})
+	now := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	var nowMu sync.Mutex
+	r.now = func() time.Time {
+		nowMu.Lock()
+		defer nowMu.Unlock()
+		return now
+	}
 	if err := r.ObserveNode(context.Background(), "n1", report.Host{EgressIPv4: "8.8.8.8"}); err != nil {
 		t.Fatal(err)
 	}
@@ -615,6 +705,9 @@ func TestRunRetriesObservationArrivingBeforePendingCleanup(t *testing.T) {
 		close(resume)
 		t.Fatal(err)
 	}
+	nowMu.Lock()
+	now = now.Add(5 * time.Minute)
+	nowMu.Unlock()
 	close(resume)
 
 	deadline := time.Now().Add(time.Second)

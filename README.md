@@ -176,6 +176,10 @@ Omit `[collect.egress_ip]` to use these defaults. Within each IP family, the
 endpoints are ordered fallbacks tried in listed order; successful public egress
 IP values are cached in `/etc/net-probe/egress-ip-cache.json` with mode `0600`,
 and a provider failure does not stop the rest of the report from being sent.
+Failed discovery for one address family is retried after 5 minutes; repeated
+failures double that delay up to 6 hours. Retry state is stored in the same
+cache, so the one-shot Agent does not restart the delay every minute, while the
+last successful address remains available.
 
 ## Panel geolocation configuration
 
@@ -195,7 +199,10 @@ The default ipwhois provider allows 1,000 requests per day. The Panel keeps a
 SQLite cache and reconciles node geography with that cache, so repeated IPs do
 not require a provider request on every report. For compatible bearer-token
 providers, set `token_env` to the name of an environment variable containing
-the token; do not put the token itself in the configuration file.
+the token; do not put the token itself in the configuration file. A failed Geo
+lookup is retried after 5 minutes with an exponentially increasing delay capped
+at 6 hours. This retry state is persisted in SQLite and does not replace the
+last successful location.
 
 ## Validate configuration and preview a report
 
@@ -451,7 +458,7 @@ custom_dir = "/etc/net-probe/services.d"
 在 timer 运行时通过环境变量提供 Token，例如在 systemd drop-in 文件或运行 `net-probe` 的 shell 中设置。
 
 省略 `[collect.egress_ip]` 时会使用这些默认值。每个 IP 地址族的 endpoints 都是按列出顺序尝试的回退链；成功获取的公网出口 IP 会以 `0600` 权限缓存到
-`/etc/net-probe/egress-ip-cache.json`，单个 provider 失败不会阻止其余报告发送。
+`/etc/net-probe/egress-ip-cache.json`，单个 provider 失败不会阻止其余报告发送。某个地址族发现失败后会在 5 分钟后重试；连续失败时延迟按指数增长，最长为 6 小时。重试状态保存在同一缓存中，因此每分钟启动的一次性 Agent 不会重置延迟，最后一次成功地址仍会继续使用。
 
 ### Panel 地理位置配置
 
@@ -466,7 +473,7 @@ timeout = "4s"
 token_env = ""
 ```
 
-默认的 ipwhois provider 每天允许 1,000 次请求。Panel 使用 SQLite 缓存并将节点地理位置与缓存协调，因此重复 IP 不会在每次上报时都请求 provider。对于兼容 bearer token 的 provider，请将 `token_env` 设为包含 Token 的环境变量名；不要把 Token 本身写入配置文件。
+默认的 ipwhois provider 每天允许 1,000 次请求。Panel 使用 SQLite 缓存并将节点地理位置与缓存协调，因此重复 IP 不会在每次上报时都请求 provider。查询失败后会在 5 分钟后重试，连续失败时延迟按指数增长并在 6 小时封顶；该状态持久化在 SQLite 中，且不会覆盖最后一次成功的地理位置。对于兼容 bearer token 的 provider，请将 `token_env` 设为包含 Token 的环境变量名；不要把 Token 本身写入配置文件。
 
 ### 校验配置并预览报告
 

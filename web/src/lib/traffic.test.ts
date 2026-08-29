@@ -55,7 +55,23 @@ function metric(ts: number, services: Service[]): Metric {
   };
 }
 
+function wireMetric(ts: number, services: Service[]): Metric {
+  return {
+    ...metric(ts, []),
+    services_json: services,
+  };
+}
+
 describe("aggregateTraffic", () => {
+  it("accepts the metrics handler array wire shape", () => {
+    const summary = aggregateTraffic([wireMetric(1, [serviceWithTraffic(7, 9)])]);
+
+    expect(summary.points).toEqual([
+      { ts: 1, tx: 7, rx: 9, successful: 1, eligible: 1, partial: false },
+    ]);
+    expect(summary.emptyState).toBeNull();
+  });
+
   it("keeps an all-zero successful point", () => {
     const summary = aggregateTraffic([metric(1, [serviceWithTraffic(0, 0)])]);
 

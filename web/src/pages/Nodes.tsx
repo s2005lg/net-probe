@@ -190,7 +190,7 @@ export default function NodesPage() {
                     </div>
                   ) : null}
                 </td>
-                <td className="px-3 py-2 text-muted">{egressIP(n.host)}</td>
+                <td className="px-3 py-2 text-muted">{egressIP(n.host, n.effective_ip)}</td>
                 <td className="px-3 py-2 text-muted">{n.ip_location || "—"}</td>
                 <td className="px-3 py-2 text-muted">
                   {n.services.filter((s) => s.type !== "generic").map((s) => s.type).join(", ") || "—"}
@@ -232,7 +232,7 @@ export default function NodesPage() {
                     {nodeName(n)}
                   </Link>
                   <div className="mt-0.5 truncate text-xs text-muted">
-                    {egressIP(n.host)}
+                    {egressIP(n.host, n.effective_ip)}
                   </div>
                 </div>
                 <StatusBadge status={n.status} />
@@ -249,7 +249,7 @@ export default function NodesPage() {
               <dl className="mt-3 space-y-1 text-sm text-muted">
                 <div className="flex justify-between gap-2">
                   <dt>出口 IP</dt>
-                  <dd className="truncate text-fg">{egressIP(n.host)}</dd>
+                  <dd className="truncate text-fg">{egressIP(n.host, n.effective_ip)}</dd>
                 </div>
                 <div className="flex justify-between gap-2">
                   <dt>国家/地区</dt>

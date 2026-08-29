@@ -12,6 +12,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/s2005lg/net-probe/internal/panel/auth"
+	panelgeo "github.com/s2005lg/net-probe/internal/panel/geo"
 	"github.com/s2005lg/net-probe/internal/report"
 )
 
@@ -23,6 +24,7 @@ type nodeRow struct {
 	LastReportAt   int64           `json:"last_report_at"`
 	Host           json.RawMessage `json:"host"`
 	Services       json.RawMessage `json:"services"`
+	EffectiveIP    string          `json:"effective_ip"`
 	Status         string          `json:"status"`
 	IPLocation     string          `json:"ip_location"`
 	IPCountry      string          `json:"ip_country"`
@@ -57,6 +59,10 @@ func scanNode(scanner interface{ Scan(...any) error }) (nodeRow, error) {
 	err := scanner.Scan(&n.NodeID, &n.Alias, &n.MutedUntil, &n.LastReportAt, &host, &services, &n.IPLocation, &n.IPCountry, &n.IPRegion, &n.IPCity, &n.IPGeoUpdatedAt)
 	n.Host = json.RawMessage(host)
 	n.Services = json.RawMessage(services)
+	var reportHost report.Host
+	if json.Unmarshal(n.Host, &reportHost) == nil {
+		n.EffectiveIP = panelgeo.EffectiveIP(reportHost)
+	}
 	return n, err
 }
 

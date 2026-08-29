@@ -17,8 +17,14 @@ export interface TrafficSummary {
   emptyState: TrafficEmptyState | null;
 }
 
-function parseServices(servicesJson?: string): { services: Service[]; unknownCoverage: boolean } {
+function parseServices(
+  servicesJson?: Service[] | string,
+): { services: Service[]; unknownCoverage: boolean } {
   if (!servicesJson) return { services: [], unknownCoverage: true };
+
+  if (Array.isArray(servicesJson)) {
+    return { services: servicesJson, unknownCoverage: false };
+  }
 
   try {
     const parsed: unknown = JSON.parse(servicesJson);

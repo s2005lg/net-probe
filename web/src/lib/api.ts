@@ -123,6 +123,7 @@ export interface Node {
   status: NodeStatus;
   host: Host;
   services: Service[];
+  effective_ip?: string;
   ip_location?: string;
 }
 
@@ -187,7 +188,7 @@ export interface Metric {
   load15: number;
   mem_used_pct: number;
   disk_used_pct: number;
-  services_json?: string;
+  services_json?: Service[] | string;
 }
 
 export interface SettingsData {

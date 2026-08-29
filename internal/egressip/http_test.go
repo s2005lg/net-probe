@@ -22,7 +22,20 @@ func TestDiscoverValidatesFamily(t *testing.T) {
 		{"ipv6", IPv6, "2001:4860:4860::8888\n", "2001:4860:4860::8888", true},
 		{"wrong family", IPv4, "2001:4860:4860::8888", "", false},
 		{"private", IPv4, "192.168.1.2", "", false},
+		{"cgnat", IPv4, "100.64.0.1", "", false},
+		{"ietf protocol assignment", IPv4, "192.0.0.1", "", false},
+		{"documentation 1", IPv4, "192.0.2.1", "", false},
+		{"benchmarking", IPv4, "198.18.0.1", "", false},
+		{"documentation 2", IPv4, "198.51.100.1", "", false},
+		{"documentation 3", IPv4, "203.0.113.1", "", false},
+		{"reserved", IPv4, "240.0.0.1", "", false},
 		{"loopback", IPv6, "::1", "", false},
+		{"IPv6 discard only", IPv6, "100::1", "", false},
+		{"IPv6 benchmarking", IPv6, "2001:2::1", "", false},
+		{"IPv6 documentation", IPv6, "2001:db8::1", "", false},
+		{"IPv6 documentation 2", IPv6, "3fff::1", "", false},
+		{"IPv6 segment routing", IPv6, "5f00::1", "", false},
+		{"mapped IPv4", IPv4, "::ffff:8.8.8.8", "8.8.8.8", true},
 		{"malformed", IPv4, "not-an-ip", "", false},
 	}
 	for _, tt := range tests {
@@ -100,6 +113,47 @@ func TestHTTPClientRejectsHTTPSDowngrade(t *testing.T) {
 	}
 	if err == nil || !reflect.DeepEqual(schemes, []string{"https"}) {
 		t.Fatalf("Get() error = %v, schemes = %v; want HTTPS-to-HTTP redirect rejection", err, schemes)
+	}
+}
+
+func TestHTTPClientRejectsLoopbackHTTPRedirectToExternalHTTP(t *testing.T) {
+	client := NewHTTPClient(time.Second)
+	var hosts []string
+	client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		hosts = append(hosts, req.URL.Hostname())
+		resp := response(http.StatusFound, "")
+		resp.Header.Set("Location", "http://public.example/ip")
+		return resp, nil
+	})
+
+	resp, err := client.Get("http://localhost/ip")
+	if resp != nil {
+		resp.Body.Close()
+	}
+	if err == nil || !reflect.DeepEqual(hosts, []string{"localhost"}) {
+		t.Fatalf("Get() error = %v, hosts = %v; want external cleartext redirect rejection", err, hosts)
+	}
+}
+
+func TestHTTPClientAllowsLoopbackHTTPRedirect(t *testing.T) {
+	client := NewHTTPClient(time.Second)
+	var hosts []string
+	client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		hosts = append(hosts, req.URL.Hostname())
+		if len(hosts) == 1 {
+			resp := response(http.StatusFound, "")
+			resp.Header.Set("Location", "http://127.0.0.1/ip")
+			return resp, nil
+		}
+		return response(http.StatusOK, "8.8.8.8"), nil
+	})
+
+	resp, err := client.Get("http://localhost/ip")
+	if resp != nil {
+		resp.Body.Close()
+	}
+	if err != nil || !reflect.DeepEqual(hosts, []string{"localhost", "127.0.0.1"}) {
+		t.Fatalf("Get() error = %v, hosts = %v; want loopback cleartext redirect", err, hosts)
 	}
 }
 
