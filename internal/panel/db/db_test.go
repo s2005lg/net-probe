@@ -82,9 +82,13 @@ func TestMigrateControlPlaneSchema(t *testing.T) {
 			t.Fatalf("sessions.%s count=%d err=%v", column, count, err)
 		}
 	}
+	const rawBearerToken = "panel-session-bearer"
+	if _, err := d.Exec(`INSERT INTO sessions(token,session_id,user_id,created_at,expires_at) VALUES(?,?,?,?,?)`, rawBearerToken, "audit-session-ref", 1, 1, 2); err != nil {
+		t.Fatalf("insert audit session: %v", err)
+	}
 
-	if _, err := d.Exec(`INSERT INTO agent_commands(command_id,agent_id,sequence,action,payload,signature,state,issued_at,expires_at,result_json)
-		VALUES('cmd-1','agent-1',1,'collect_now','{}','sig','queued',1,2,'{}')`); err != nil {
+	if _, err := d.Exec(`INSERT INTO agent_commands(command_id,agent_id,sequence,action,payload,signature,state,issued_at,expires_at,result_json,created_session_id)
+		VALUES('cmd-1','agent-1',1,'collect_now','{}','sig','queued',1,2,'{}','audit-session-ref')`); err != nil {
 		t.Fatalf("insert valid command: %v", err)
 	}
 	if _, err := d.Exec(`INSERT INTO agent_commands(command_id,agent_id,sequence,action,payload,signature,state,issued_at,expires_at,result_json)
@@ -96,11 +100,37 @@ func TestMigrateControlPlaneSchema(t *testing.T) {
 		t.Fatal("invalid action accepted")
 	}
 	if _, err := d.Exec(`INSERT INTO agent_command_events(command_id,actor_id,session_id,from_state,to_state,created_at,reason_code)
-		VALUES('cmd-1',1,'session','queued','dispatched',3,'delivered')`); err != nil {
+		VALUES('cmd-1',1,'audit-session-ref','queued','dispatched',3,'delivered')`); err != nil {
 		t.Fatalf("insert command event: %v", err)
 	}
 	if _, err := d.Exec(`UPDATE agent_command_events SET reason_code='changed' WHERE command_id='cmd-1'`); err == nil {
 		t.Fatal("command event update accepted")
+	}
+	if _, err := d.Exec(`INSERT INTO agent_enrollment_tokens(token_hash,created_by_user_id,created_at,expires_at,use_limit,label)
+		VALUES('token-1',1,1,2,2,'too-many-uses')`); err == nil {
+		t.Fatal("multi-use enrollment token accepted")
+	}
+	if _, err := d.Exec(`INSERT INTO agent_enrollment_tokens(token_hash,created_by_user_id,created_at,expires_at,label)
+		VALUES('token-2',1,1,2,'one-use')`); err != nil {
+		t.Fatalf("insert one-use enrollment token: %v", err)
+	}
+	if _, err := d.Exec(`UPDATE agent_enrollment_tokens SET consumed_at=3 WHERE token_hash='token-2'`); err != nil {
+		t.Fatalf("consume enrollment token: %v", err)
+	}
+	if _, err := d.Exec(`UPDATE agent_enrollment_tokens SET consumed_at=4 WHERE token_hash='token-2'`); err == nil {
+		t.Fatal("enrollment token consumed twice")
+	}
+	if _, err := d.Exec(`INSERT INTO agent_commands(command_id,agent_id,sequence,action,payload,signature,state,issued_at,expires_at,result_code,result_json)
+		VALUES('cmd-4','agent-1',4,'collect_now','{}','sig','queued',1,2,?,'{}')`, strings.Repeat("x", 129)); err == nil {
+		t.Fatal("oversized command result code accepted")
+	}
+	if _, err := d.Exec(`INSERT INTO agent_commands(command_id,agent_id,sequence,action,payload,signature,state,issued_at,expires_at,result_json,created_session_id)
+		VALUES('cmd-5','agent-1',5,'collect_now','{}','sig','queued',1,2,'{}',?)`, rawBearerToken); err == nil {
+		t.Fatal("raw bearer command audit reference accepted")
+	}
+	if _, err := d.Exec(`INSERT INTO agent_command_events(command_id,actor_id,session_id,from_state,to_state,created_at,reason_code)
+		VALUES('cmd-1',1,?,'queued','dispatched',4,'delivered')`, rawBearerToken); err == nil {
+		t.Fatal("raw bearer event audit reference accepted")
 	}
 }
 

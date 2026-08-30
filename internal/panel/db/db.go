@@ -170,10 +170,19 @@ CREATE TABLE IF NOT EXISTS agent_enrollment_tokens(
 	created_at INTEGER NOT NULL,
 	expires_at INTEGER NOT NULL,
 	consumed_at INTEGER NOT NULL DEFAULT 0,
-	use_limit INTEGER NOT NULL DEFAULT 1 CHECK(use_limit > 0),
-	use_count INTEGER NOT NULL DEFAULT 0 CHECK(use_count >= 0),
+	use_limit INTEGER NOT NULL DEFAULT 1 CHECK(use_limit = 1),
 	label TEXT NOT NULL DEFAULT ''
 );
+CREATE TRIGGER IF NOT EXISTS agent_enrollment_tokens_one_use_insert
+BEFORE INSERT ON agent_enrollment_tokens WHEN NEW.use_limit <> 1
+BEGIN SELECT RAISE(ABORT, 'enrollment tokens are single-use'); END;
+CREATE TRIGGER IF NOT EXISTS agent_enrollment_tokens_one_use_update
+BEFORE UPDATE OF use_limit ON agent_enrollment_tokens WHEN NEW.use_limit <> 1
+BEGIN SELECT RAISE(ABORT, 'enrollment tokens are single-use'); END;
+CREATE TRIGGER IF NOT EXISTS agent_enrollment_tokens_consume_once
+BEFORE UPDATE OF consumed_at ON agent_enrollment_tokens
+WHEN OLD.consumed_at <> 0 OR NEW.consumed_at <= 0
+BEGIN SELECT RAISE(ABORT, 'enrollment token already consumed'); END;
 CREATE TABLE IF NOT EXISTS agent_commands(
 	command_id TEXT PRIMARY KEY,
 	agent_id TEXT NOT NULL,
@@ -191,12 +200,26 @@ CREATE TABLE IF NOT EXISTS agent_commands(
 	started_at INTEGER NOT NULL DEFAULT 0,
 	finished_at INTEGER NOT NULL DEFAULT 0,
 	attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
-	result_code TEXT NOT NULL DEFAULT '',
+	result_code TEXT NOT NULL DEFAULT '' CHECK(length(result_code) <= 128),
 	result_json TEXT NOT NULL DEFAULT '{}' CHECK(length(result_json) <= 16384),
 	created_by_user_id INTEGER NOT NULL DEFAULT 0,
 	created_session_id TEXT NOT NULL DEFAULT '',
 	UNIQUE(agent_id, sequence)
 );
+CREATE TRIGGER IF NOT EXISTS agent_commands_result_code_bound_insert
+BEFORE INSERT ON agent_commands WHEN length(NEW.result_code) > 128
+BEGIN SELECT RAISE(ABORT, 'command result code exceeds limit'); END;
+CREATE TRIGGER IF NOT EXISTS agent_commands_result_code_bound_update
+BEFORE UPDATE OF result_code ON agent_commands WHEN length(NEW.result_code) > 128
+BEGIN SELECT RAISE(ABORT, 'command result code exceeds limit'); END;
+CREATE TRIGGER IF NOT EXISTS agent_commands_session_reference_insert
+BEFORE INSERT ON agent_commands
+WHEN NEW.created_session_id <> '' AND NOT EXISTS (SELECT 1 FROM sessions WHERE session_id=NEW.created_session_id)
+BEGIN SELECT RAISE(ABORT, 'unknown command session reference'); END;
+CREATE TRIGGER IF NOT EXISTS agent_commands_session_reference_update
+BEFORE UPDATE OF created_session_id ON agent_commands
+WHEN NEW.created_session_id <> '' AND NOT EXISTS (SELECT 1 FROM sessions WHERE session_id=NEW.created_session_id)
+BEGIN SELECT RAISE(ABORT, 'unknown command session reference'); END;
 CREATE INDEX IF NOT EXISTS idx_agent_commands_delivery ON agent_commands(agent_id,state,expires_at);
 CREATE INDEX IF NOT EXISTS idx_agent_commands_expiry ON agent_commands(state,expires_at);
 CREATE TABLE IF NOT EXISTS agent_command_events(
@@ -209,6 +232,10 @@ CREATE TABLE IF NOT EXISTS agent_command_events(
 	created_at INTEGER NOT NULL,
 	reason_code TEXT NOT NULL
 );
+CREATE TRIGGER IF NOT EXISTS agent_command_events_session_reference_insert
+BEFORE INSERT ON agent_command_events
+WHEN NEW.session_id <> '' AND NOT EXISTS (SELECT 1 FROM sessions WHERE session_id=NEW.session_id)
+BEGIN SELECT RAISE(ABORT, 'unknown command event session reference'); END;
 CREATE TRIGGER IF NOT EXISTS agent_command_events_no_update
 BEFORE UPDATE ON agent_command_events BEGIN SELECT RAISE(ABORT, 'agent command events are append-only'); END;
 CREATE TRIGGER IF NOT EXISTS agent_command_events_no_delete
