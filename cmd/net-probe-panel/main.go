@@ -16,6 +16,7 @@ import (
 	"github.com/s2005lg/net-probe/internal/panel/config"
 	"github.com/s2005lg/net-probe/internal/panel/db"
 	"github.com/s2005lg/net-probe/internal/panel/geo"
+	"github.com/s2005lg/net-probe/internal/panel/pki"
 	"github.com/s2005lg/net-probe/internal/panel/retention"
 	panelversion "github.com/s2005lg/net-probe/internal/panel/version"
 )
@@ -69,25 +70,29 @@ func main() {
 		}
 	}
 
-	certPath := filepath.Join(cfg.DataDir, "cert.pem")
-	keyPath := filepath.Join(cfg.DataDir, "key.pem")
-	if _, err := os.Stat(certPath); os.IsNotExist(err) {
-		if err := api.GenerateSelfSigned(certPath, keyPath); err != nil {
-			log.Fatalf("generate self-signed cert: %v", err)
-		}
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go refresher.Run(ctx)
 	startBackground(ctx, d, cfg, refresher)
 
-	server := api.New(d, cfg, refresher)
-	server.ConfigPath = *cfgPath
+	apiServer := api.New(d, cfg, refresher)
+	apiServer.ConfigPath = *cfgPath
+	srv, manager, err := newPanelTLSServer(cfg, apiServer.Routes())
+	if err != nil {
+		log.Fatalf("configure private PKI: %v", err)
+	}
 	log.Printf("net-probe-panel listening on %s", cfg.ListenAddr)
-	if err := http.ListenAndServeTLS(cfg.ListenAddr, certPath, keyPath, server.Routes()); err != nil {
+	if err := srv.ListenAndServeTLS(manager.ServerCertFile, manager.ServerKeyFile); err != nil {
 		log.Fatalf("serve: %v", err)
 	}
+}
+
+func newPanelTLSServer(cfg *config.Config, handler http.Handler) (*http.Server, *pki.Manager, error) {
+	manager, err := pki.Ensure(cfg.DataDir, cfg.PublicURL)
+	if err != nil {
+		return nil, nil, err
+	}
+	return api.NewTLSServer(cfg.ListenAddr, handler, manager.TLSConfig()), manager, nil
 }
 
 func newGeoRefresher(d *sql.DB, cfg *config.Config) (*geo.Refresher, error) {

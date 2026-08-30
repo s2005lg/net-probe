@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,7 +13,13 @@ import (
 type Config struct {
 	ListenAddr string `toml:"listen_addr"`
 	DataDir    string `toml:"data_dir"`
-	Agent      struct {
+	PublicURL  string `toml:"public_url"`
+	Control    struct {
+		MaxConnections int `toml:"max_connections"`
+		SendQueue      int `toml:"send_queue"`
+		MessageRate    int `toml:"message_rate"`
+	} `toml:"control"`
+	Agent struct {
 		Token string `toml:"token"`
 	} `toml:"agent"`
 	Admin struct {
@@ -43,6 +50,7 @@ type Config struct {
 
 func Default() *Config {
 	c := &Config{ListenAddr: ":8443", DataDir: "/var/lib/net-probe-panel", NodeTimeout: "3m"}
+	c.Control.MaxConnections, c.Control.SendQueue, c.Control.MessageRate = 1000, 32, 120
 	c.Admin.User = "admin"
 	c.Retention.RawDays, c.Retention.HourlyDays, c.Retention.DailyDays = 7, 30, 365
 	c.Alert.CertExpiryDays, c.Alert.DiskUsagePct, c.Alert.MemUsagePct = 7, 85, 90
@@ -62,6 +70,18 @@ func Load(path string) (*Config, error) {
 }
 
 func (c *Config) Validate() error {
+	if err := validatePublicURL(c.PublicURL); err != nil {
+		return err
+	}
+	if c.Control.MaxConnections < 1 || c.Control.MaxConnections > 1000 {
+		return fmt.Errorf("control max connections must be between 1 and 1000")
+	}
+	if c.Control.SendQueue < 1 || c.Control.SendQueue > 32 {
+		return fmt.Errorf("control send queue must be between 1 and 32")
+	}
+	if c.Control.MessageRate < 1 || c.Control.MessageRate > 120 {
+		return fmt.Errorf("control message rate must be between 1 and 120 per minute")
+	}
 	if c.Geo.Provider != "ipwhois" {
 		return fmt.Errorf("geo provider must be ipwhois")
 	}
@@ -80,6 +100,23 @@ func (c *Config) Validate() error {
 		return err
 	}
 	return positiveDuration("geo refresh interval", c.Geo.RefreshInterval)
+}
+
+func validatePublicURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || strings.ToLower(u.Scheme) != "https" || u.Host == "" || u.Hostname() == "" || u.User != nil {
+		return fmt.Errorf("public url must be a valid HTTPS URL with host and port")
+	}
+	if u.Path != "" && u.Path != "/" || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("public url must not contain a path, query, or fragment")
+	}
+	if port := u.Port(); port != "" {
+		value, err := strconv.Atoi(port)
+		if err != nil || value < 1 || value > 65535 {
+			return fmt.Errorf("public url has an invalid port")
+		}
+	}
+	return nil
 }
 
 func positiveDuration(name, value string) error {
