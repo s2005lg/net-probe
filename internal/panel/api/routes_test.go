@@ -71,12 +71,15 @@ func TestEnsureAdmin(t *testing.T) {
 		t.Fatalf("user count = %d", count)
 	}
 
-	var hash string
-	if err := d.QueryRow(`SELECT password_hash FROM users WHERE username=?`, cfg.Admin.User).Scan(&hash); err != nil {
+	var hash, role string
+	if err := d.QueryRow(`SELECT password_hash,role FROM users WHERE username=?`, cfg.Admin.User).Scan(&hash, &role); err != nil {
 		t.Fatalf("query hash: %v", err)
 	}
 	if !auth.CheckPassword(hash, "secret") {
 		t.Fatal("password does not match")
+	}
+	if role != string(auth.Admin) {
+		t.Fatalf("bootstrap role=%q", role)
 	}
 
 	if err := EnsureAdmin(d, cfg.Admin.User, "secret2"); err != nil {
