@@ -145,6 +145,12 @@ func addLegacyEnrollmentTokenUseCountGuards(d sqlExecutor) error {
 	if _, err := d.Exec(`UPDATE agent_enrollment_tokens SET use_limit=1 WHERE use_limit<>1`); err != nil {
 		return err
 	}
+	// Legacy schemas allowed negative timestamps. They never represented a valid
+	// completed enrollment, so normalize them to the unconsumed sentinel before
+	// reconciling the legacy counter.
+	if _, err := d.Exec(`UPDATE agent_enrollment_tokens SET consumed_at=0 WHERE consumed_at<0`); err != nil {
+		return err
+	}
 	if _, err := d.Exec(`UPDATE agent_enrollment_tokens SET use_count=CASE WHEN consumed_at>0 THEN 1 ELSE 0 END
 		WHERE use_count<>CASE WHEN consumed_at>0 THEN 1 ELSE 0 END`); err != nil {
 		return err
@@ -205,7 +211,7 @@ CREATE TABLE IF NOT EXISTS agent_enrollment_tokens(
 	created_by_user_id INTEGER NOT NULL,
 	created_at INTEGER NOT NULL,
 	expires_at INTEGER NOT NULL,
-	consumed_at INTEGER NOT NULL DEFAULT 0,
+	consumed_at INTEGER NOT NULL DEFAULT 0 CHECK(consumed_at >= 0),
 	use_limit INTEGER NOT NULL DEFAULT 1 CHECK(use_limit = 1),
 	label TEXT NOT NULL DEFAULT ''
 );
@@ -217,7 +223,9 @@ BEFORE UPDATE OF use_limit ON agent_enrollment_tokens WHEN NEW.use_limit <> 1
 BEGIN SELECT RAISE(ABORT, 'enrollment tokens are single-use'); END;
 CREATE TRIGGER IF NOT EXISTS agent_enrollment_tokens_consume_once
 BEFORE UPDATE OF consumed_at ON agent_enrollment_tokens
-WHEN OLD.consumed_at <> 0 OR NEW.consumed_at <= 0
+WHEN OLD.consumed_at > 0
+	OR (OLD.consumed_at = 0 AND NEW.consumed_at <= 0)
+	OR (OLD.consumed_at < 0 AND NEW.consumed_at <> 0)
 BEGIN SELECT RAISE(ABORT, 'enrollment token already consumed'); END;
 CREATE TABLE IF NOT EXISTS agent_commands(
 	command_id TEXT PRIMARY KEY,

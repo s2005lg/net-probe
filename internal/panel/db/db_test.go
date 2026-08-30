@@ -120,6 +120,10 @@ func TestMigrateControlPlaneSchema(t *testing.T) {
 	if _, err := d.Exec(`UPDATE agent_enrollment_tokens SET consumed_at=4 WHERE token_hash='token-2'`); err == nil {
 		t.Fatal("enrollment token consumed twice")
 	}
+	if _, err := d.Exec(`INSERT INTO agent_enrollment_tokens(token_hash,created_by_user_id,created_at,expires_at,consumed_at,label)
+		VALUES('token-negative',1,1,2,-1,'invalid-timestamp')`); err == nil {
+		t.Fatal("negative enrollment consumption timestamp accepted")
+	}
 	if _, err := d.Exec(`INSERT INTO agent_commands(command_id,agent_id,sequence,action,payload,signature,state,issued_at,expires_at,result_code,result_json)
 		VALUES('cmd-4','agent-1',4,'collect_now','{}','sig','queued',1,2,?,'{}')`, strings.Repeat("x", 129)); err == nil {
 		t.Fatal("oversized command result code accepted")
@@ -229,7 +233,7 @@ CREATE TABLE agent_enrollment_tokens(
 	label TEXT NOT NULL DEFAULT ''
 );
 INSERT INTO agent_enrollment_tokens(token_hash,created_by_user_id,created_at,expires_at,consumed_at,use_limit,use_count,label)
-VALUES('unconsumed',1,1,2,0,1,0,'preserve'),('consumed',1,1,2,3,2,2,'normalize');`); err != nil {
+VALUES('unconsumed',1,1,2,0,1,0,'preserve'),('consumed',1,1,2,3,2,2,'normalize'),('negative',1,1,2,-1,1,1,'normalize-negative');`); err != nil {
 		t.Fatal(err)
 	}
 	if err := Migrate(d); err != nil {
@@ -253,6 +257,12 @@ VALUES('unconsumed',1,1,2,0,1,0,'preserve'),('consumed',1,1,2,3,2,2,'normalize')
 	if useLimit != 1 || useCount != 1 || consumedAt != 3 {
 		t.Fatalf("consumed token limit=%d count=%d consumed=%d", useLimit, useCount, consumedAt)
 	}
+	if err := d.QueryRow(`SELECT use_limit,use_count,consumed_at FROM agent_enrollment_tokens WHERE token_hash='negative'`).Scan(&useLimit, &useCount, &consumedAt); err != nil {
+		t.Fatal(err)
+	}
+	if useLimit != 1 || useCount != 0 || consumedAt != 0 {
+		t.Fatalf("negative token limit=%d count=%d consumed=%d", useLimit, useCount, consumedAt)
+	}
 
 	if _, err := d.Exec(`INSERT INTO agent_enrollment_tokens(token_hash,created_by_user_id,created_at,expires_at,use_limit,use_count,label)
 		VALUES('too-many',1,1,2,1,2,'reject')`); err == nil {
@@ -275,6 +285,18 @@ VALUES('unconsumed',1,1,2,0,1,0,'preserve'),('consumed',1,1,2,3,2,2,'normalize')
 	}
 	if _, err := d.Exec(`UPDATE agent_enrollment_tokens SET consumed_at=5 WHERE token_hash='unconsumed'`); err == nil {
 		t.Fatal("legacy token consumed twice")
+	}
+	if _, err := d.Exec(`UPDATE agent_enrollment_tokens SET consumed_at=6 WHERE token_hash='negative'`); err != nil {
+		t.Fatalf("consume normalized negative token: %v", err)
+	}
+	if err := d.QueryRow(`SELECT use_count FROM agent_enrollment_tokens WHERE token_hash='negative'`).Scan(&useCount); err != nil {
+		t.Fatal(err)
+	}
+	if useCount != 1 {
+		t.Fatalf("normalized negative token count=%d", useCount)
+	}
+	if _, err := d.Exec(`UPDATE agent_enrollment_tokens SET consumed_at=7 WHERE token_hash='negative'`); err == nil {
+		t.Fatal("normalized negative token consumed twice")
 	}
 }
 
