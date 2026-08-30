@@ -24,8 +24,20 @@ type Sink struct {
 }
 
 type AgentConfig struct {
-	NodeID   string `toml:"node_id"`
-	LogLevel string `toml:"log_level"`
+	NodeID          string `toml:"node_id"`
+	LogLevel        string `toml:"log_level"`
+	ReportInterval  string `toml:"report_interval"`
+	CollectTimeout  string `toml:"collect_timeout"`
+	ShutdownTimeout string `toml:"shutdown_timeout"`
+}
+
+type PanelConfig struct {
+	URL            string `toml:"url"`
+	CAFile         string `toml:"ca_file"`
+	CertFile       string `toml:"cert_file"`
+	KeyFile        string `toml:"key_file"`
+	CommandKeyFile string `toml:"command_key_file"`
+	ReleaseKeyFile string `toml:"release_key_file"`
 }
 
 type EgressIPConfig struct {
@@ -59,6 +71,7 @@ type StatsConfig struct {
 
 type Config struct {
 	Agent   AgentConfig   `toml:"agent"`
+	Panel   PanelConfig   `toml:"panel"`
 	Sinks   []Sink        `toml:"sink"`
 	Collect CollectConfig `toml:"collect"`
 	Detect  DetectConfig  `toml:"detect"`
@@ -67,7 +80,19 @@ type Config struct {
 
 func Default() *Config {
 	return &Config{
-		Agent: AgentConfig{LogLevel: "info"},
+		Agent: AgentConfig{
+			LogLevel:        "info",
+			ReportInterval:  "60s",
+			CollectTimeout:  "45s",
+			ShutdownTimeout: "20s",
+		},
+		Panel: PanelConfig{
+			CAFile:         "/etc/net-probe/pki/ca.crt",
+			CertFile:       "/etc/net-probe/pki/agent.crt",
+			KeyFile:        "/etc/net-probe/pki/agent.key",
+			CommandKeyFile: "/etc/net-probe/pki/command-signing.pub",
+			ReleaseKeyFile: "/etc/net-probe/pki/release-signing.pub",
+		},
 		Collect: CollectConfig{
 			DiskMounts: []string{"/"},
 			Upgradable: true,
@@ -88,8 +113,12 @@ func Default() *Config {
 
 func Load(path string) (*Config, error) {
 	cfg := Default()
-	if _, err := toml.DecodeFile(path, cfg); err != nil {
+	meta, err := toml.DecodeFile(path, cfg)
+	if err != nil {
 		return nil, fmt.Errorf("decode config: %w", err)
+	}
+	if unknown := meta.Undecoded(); len(unknown) != 0 {
+		return nil, fmt.Errorf("unknown config keys: %v", unknown)
 	}
 	if cfg.Agent.LogLevel == "" {
 		cfg.Agent.LogLevel = "info"
@@ -98,24 +127,66 @@ func Load(path string) (*Config, error) {
 }
 
 func (c *Config) Validate() error {
-	if len(c.Sinks) == 0 {
-		return fmt.Errorf("at least one sink is required")
+	if err := validatePanel(c.Panel); err != nil {
+		return err
+	}
+	if err := validateResidentTiming(c.Agent); err != nil {
+		return err
 	}
 	for i, s := range c.Sinks {
-		if s.Type != "panel" && s.Type != "webhook" {
+		if s.Type != "webhook" {
+			if s.Type == "panel" {
+				return fmt.Errorf("sink %d: panel reporting must use [panel]", i)
+			}
 			return fmt.Errorf("sink %d: unsupported type %q", i, s.Type)
 		}
 		if s.URL == "" {
 			return fmt.Errorf("sink %d: url is required", i)
 		}
-		if s.Type == "panel" && strings.HasPrefix(s.URL, "http://") && !s.InsecureAllowHTTP {
-			if !strings.HasPrefix(s.URL, "http://127.0.0.1") && !strings.HasPrefix(s.URL, "http://localhost") {
-				return fmt.Errorf("sink %d: panel requires https unless insecure_allow_http", i)
-			}
-		}
 	}
 	if err := validateEgressIP(c.Collect.EgressIP); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validatePanel(panel PanelConfig) error {
+	if panel.URL == "" {
+		return fmt.Errorf("panel url is required")
+	}
+	u, err := url.Parse(panel.URL)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" {
+		return fmt.Errorf("panel url must be a secure https URL")
+	}
+	for name, path := range map[string]string{
+		"CA file":          panel.CAFile,
+		"certificate file": panel.CertFile,
+		"private key file": panel.KeyFile,
+		"command key file": panel.CommandKeyFile,
+		"release key file": panel.ReleaseKeyFile,
+	} {
+		if path == "" {
+			return fmt.Errorf("panel %s is required", name)
+		}
+	}
+	return nil
+}
+
+func validateResidentTiming(agent AgentConfig) error {
+	reportInterval, err := time.ParseDuration(agent.ReportInterval)
+	if err != nil || reportInterval <= 0 {
+		return fmt.Errorf("agent report interval must be a positive duration")
+	}
+	collectTimeout, err := time.ParseDuration(agent.CollectTimeout)
+	if err != nil || collectTimeout <= 0 {
+		return fmt.Errorf("agent collect timeout must be a positive duration")
+	}
+	shutdownTimeout, err := time.ParseDuration(agent.ShutdownTimeout)
+	if err != nil || shutdownTimeout <= 0 {
+		return fmt.Errorf("agent shutdown timeout must be a positive duration")
+	}
+	if collectTimeout >= reportInterval {
+		return fmt.Errorf("agent collect timeout must be shorter than report interval")
 	}
 	return nil
 }

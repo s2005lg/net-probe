@@ -16,10 +16,8 @@ func TestLoadAndValidate(t *testing.T) {
 node_id = "node-1"
 log_level = "debug"
 
-[[sink]]
-type = "panel"
+[panel]
 url = "https://panel.example.com"
-token_env = "NET_PROBE_PANEL_TOKEN"
 
 [[sink]]
 type = "webhook"
@@ -32,11 +30,11 @@ url = "https://uptime.example/api/push/x"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.Sinks) != 2 {
+	if len(cfg.Sinks) != 1 {
 		t.Fatalf("sinks = %d", len(cfg.Sinks))
 	}
-	if cfg.Sinks[0].TokenEnv != "NET_PROBE_PANEL_TOKEN" {
-		t.Fatalf("token_env = %q", cfg.Sinks[0].TokenEnv)
+	if cfg.Panel.URL != "https://panel.example.com" {
+		t.Fatalf("panel url = %q", cfg.Panel.URL)
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
@@ -45,7 +43,7 @@ url = "https://uptime.example/api/push/x"
 
 func TestValidateRejectsHTTPPanel(t *testing.T) {
 	cfg := Default()
-	cfg.Sinks = []Sink{{Type: "panel", URL: "http://panel.example.com"}}
+	cfg.Panel.URL = "http://panel.example.com"
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected error for http panel")
 	}
@@ -55,6 +53,9 @@ func TestStatsConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 	content := `
+[panel]
+url = "https://panel.example.com"
+
 [[sink]]
 type = "webhook"
 url = "https://example.com/report"
@@ -81,8 +82,7 @@ func TestStatsServiceCanBeDisabled(t *testing.T) {
 	path := filepath.Join(dir, "config.toml")
 	content := `[agent]
 node_id = "n1"
-[[sink]]
-type = "panel"
+[panel]
 url = "https://panel.example"
 [stats.services.xray]
 enabled = false
@@ -115,7 +115,7 @@ func TestEgressIPDefaults(t *testing.T) {
 
 func TestValidateRejectsUnsafeEgressEndpoint(t *testing.T) {
 	cfg := Default()
-	cfg.Sinks = []Sink{{Type: "webhook", URL: "https://example.com/report"}}
+	cfg.Panel.URL = "https://panel.example.com"
 	cfg.Collect.EgressIP.IPv4Endpoints = []string{"http://public.example/ip"}
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "egress IPv4 endpoint") {
 		t.Fatalf("Validate() error = %v", err)
@@ -124,9 +124,101 @@ func TestValidateRejectsUnsafeEgressEndpoint(t *testing.T) {
 
 func TestValidateAcceptsLocalEgressEndpoint(t *testing.T) {
 	cfg := Default()
-	cfg.Sinks = []Sink{{Type: "webhook", URL: "https://example.com/report"}}
+	cfg.Panel.URL = "https://panel.example.com"
 	cfg.Collect.EgressIP.IPv4Endpoints = []string{"http://127.0.0.1:8080/ip"}
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestResidentDefaults(t *testing.T) {
+	c := Default()
+	if c.Agent.ReportInterval != "60s" || c.Agent.CollectTimeout != "45s" || c.Agent.ShutdownTimeout != "20s" {
+		t.Fatalf("agent=%+v", c.Agent)
+	}
+}
+
+func TestPanelPKIDefaults(t *testing.T) {
+	c := Default()
+	if c.Panel.CAFile != "/etc/net-probe/pki/ca.crt" ||
+		c.Panel.CertFile != "/etc/net-probe/pki/agent.crt" ||
+		c.Panel.KeyFile != "/etc/net-probe/pki/agent.key" ||
+		c.Panel.CommandKeyFile != "/etc/net-probe/pki/command-signing.pub" ||
+		c.Panel.ReleaseKeyFile != "/etc/net-probe/pki/release-signing.pub" {
+		t.Fatalf("panel defaults=%+v", c.Panel)
+	}
+}
+
+func TestValidateRequiresSecurePanelURL(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{name: "missing"},
+		{name: "insecure", url: "http://panel.example.com"},
+		{name: "missing host", url: "https:///control"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Panel.URL = tt.url
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("accepted insecure panel URL")
+			}
+		})
+	}
+}
+
+func TestValidateResidentTiming(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*AgentConfig)
+	}{
+		{name: "non-positive report interval", mutate: func(c *AgentConfig) { c.ReportInterval = "0s" }},
+		{name: "non-positive collect timeout", mutate: func(c *AgentConfig) { c.CollectTimeout = "0s" }},
+		{name: "non-positive shutdown timeout", mutate: func(c *AgentConfig) { c.ShutdownTimeout = "0s" }},
+		{name: "collection equals report interval", mutate: func(c *AgentConfig) { c.CollectTimeout = c.ReportInterval }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Panel.URL = "https://panel.example.com"
+			tt.mutate(&cfg.Agent)
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("accepted invalid resident timing")
+			}
+		})
+	}
+}
+
+func TestLoadRejectsPanelTokenAndSkipVerifyConfiguration(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+	}{
+		{name: "token environment", key: `token_env = "NET_PROBE_PANEL_TOKEN"`},
+		{name: "token file", key: `token_file = "/run/secrets/panel-token"`},
+		{name: "skip verify", key: "tls_skip_verify = true"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.toml")
+			content := "[panel]\nurl = \"https://panel.example.com\"\n" + tt.key + "\n"
+			if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); err == nil {
+				t.Fatal("accepted forbidden Panel credential or TLS configuration")
+			}
+		})
+	}
+}
+
+func TestValidateRejectsLegacyPanelSink(t *testing.T) {
+	cfg := Default()
+	cfg.Panel.URL = "https://panel.example.com"
+	cfg.Sinks = []Sink{{Type: "panel", URL: "https://panel.example.com"}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("accepted legacy panel sink")
 	}
 }
