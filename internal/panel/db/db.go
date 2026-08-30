@@ -33,6 +33,9 @@ func Migrate(d *sql.DB) error {
 	if err := addMissingControlColumns(tx); err != nil {
 		return err
 	}
+	if err := addLegacyEnrollmentTokenUseCountGuards(tx); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_nodes_ip_geo_ip ON nodes(ip_geo_ip)`); err != nil {
 		return err
 	}
@@ -128,6 +131,39 @@ func addMissingControlColumns(d sqlExecutor) error {
 		}
 	}
 	_, err := d.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_session_id ON sessions(session_id) WHERE session_id <> ''`)
+	return err
+}
+
+func addLegacyEnrollmentTokenUseCountGuards(d sqlExecutor) error {
+	var count int
+	if err := d.QueryRow(`SELECT count(*) FROM pragma_table_info('agent_enrollment_tokens') WHERE name='use_count'`).Scan(&count); err != nil {
+		return err
+	}
+	if count == 0 {
+		return nil
+	}
+	if _, err := d.Exec(`UPDATE agent_enrollment_tokens SET use_limit=1 WHERE use_limit<>1`); err != nil {
+		return err
+	}
+	if _, err := d.Exec(`UPDATE agent_enrollment_tokens SET use_count=CASE WHEN consumed_at>0 THEN 1 ELSE 0 END
+		WHERE use_count<>CASE WHEN consumed_at>0 THEN 1 ELSE 0 END`); err != nil {
+		return err
+	}
+	_, err := d.Exec(`
+CREATE TRIGGER IF NOT EXISTS agent_enrollment_tokens_legacy_use_count_insert
+BEFORE INSERT ON agent_enrollment_tokens
+WHEN NEW.use_count NOT IN (0,1) OR NEW.use_count>NEW.use_limit
+	OR (NEW.use_count=0 AND NEW.consumed_at<>0) OR (NEW.use_count=1 AND NEW.consumed_at<=0)
+BEGIN SELECT RAISE(ABORT, 'invalid enrollment token use count'); END;
+CREATE TRIGGER IF NOT EXISTS agent_enrollment_tokens_legacy_use_count_update
+BEFORE UPDATE OF use_count ON agent_enrollment_tokens
+WHEN NEW.use_count NOT IN (0,1) OR NEW.use_count>NEW.use_limit
+	OR (NEW.use_count=0 AND NEW.consumed_at<>0) OR (NEW.use_count=1 AND NEW.consumed_at<=0)
+BEGIN SELECT RAISE(ABORT, 'invalid enrollment token use count'); END;
+CREATE TRIGGER IF NOT EXISTS agent_enrollment_tokens_legacy_use_count_on_consume
+AFTER UPDATE OF consumed_at ON agent_enrollment_tokens
+WHEN NEW.consumed_at>0 AND NEW.use_count=0
+BEGIN UPDATE agent_enrollment_tokens SET use_count=1 WHERE id=NEW.id; END;`)
 	return err
 }
 

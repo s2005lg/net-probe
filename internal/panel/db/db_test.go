@@ -210,6 +210,74 @@ INSERT INTO sessions(token,user_id,created_at,expires_at) VALUES('legacy-session
 	}
 }
 
+func TestMigrateHardensLegacyEnrollmentTokenUseCount(t *testing.T) {
+	d, err := Open(filepath.Join(t.TempDir(), "legacy-enrollment.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if _, err := d.Exec(`
+CREATE TABLE agent_enrollment_tokens(
+	id INTEGER PRIMARY KEY,
+	token_hash TEXT NOT NULL UNIQUE,
+	created_by_user_id INTEGER NOT NULL,
+	created_at INTEGER NOT NULL,
+	expires_at INTEGER NOT NULL,
+	consumed_at INTEGER NOT NULL DEFAULT 0,
+	use_limit INTEGER NOT NULL DEFAULT 1 CHECK(use_limit > 0),
+	use_count INTEGER NOT NULL DEFAULT 0 CHECK(use_count >= 0),
+	label TEXT NOT NULL DEFAULT ''
+);
+INSERT INTO agent_enrollment_tokens(token_hash,created_by_user_id,created_at,expires_at,consumed_at,use_limit,use_count,label)
+VALUES('unconsumed',1,1,2,0,1,0,'preserve'),('consumed',1,1,2,3,2,2,'normalize');`); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(d); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(d); err != nil {
+		t.Fatal(err)
+	}
+
+	var useLimit, useCount, consumedAt int64
+	var label string
+	if err := d.QueryRow(`SELECT use_limit,use_count,consumed_at,label FROM agent_enrollment_tokens WHERE token_hash='unconsumed'`).Scan(&useLimit, &useCount, &consumedAt, &label); err != nil {
+		t.Fatal(err)
+	}
+	if useLimit != 1 || useCount != 0 || consumedAt != 0 || label != "preserve" {
+		t.Fatalf("unconsumed token limit=%d count=%d consumed=%d label=%q", useLimit, useCount, consumedAt, label)
+	}
+	if err := d.QueryRow(`SELECT use_limit,use_count,consumed_at FROM agent_enrollment_tokens WHERE token_hash='consumed'`).Scan(&useLimit, &useCount, &consumedAt); err != nil {
+		t.Fatal(err)
+	}
+	if useLimit != 1 || useCount != 1 || consumedAt != 3 {
+		t.Fatalf("consumed token limit=%d count=%d consumed=%d", useLimit, useCount, consumedAt)
+	}
+
+	if _, err := d.Exec(`INSERT INTO agent_enrollment_tokens(token_hash,created_by_user_id,created_at,expires_at,use_limit,use_count,label)
+		VALUES('too-many',1,1,2,1,2,'reject')`); err == nil {
+		t.Fatal("legacy use_count above one accepted")
+	}
+	if _, err := d.Exec(`UPDATE agent_enrollment_tokens SET use_count=2 WHERE token_hash='unconsumed'`); err == nil {
+		t.Fatal("legacy use_count update above one accepted")
+	}
+	if _, err := d.Exec(`UPDATE agent_enrollment_tokens SET use_count=1 WHERE token_hash='unconsumed'`); err == nil {
+		t.Fatal("legacy use_count consumed without timestamp")
+	}
+	if _, err := d.Exec(`UPDATE agent_enrollment_tokens SET consumed_at=4 WHERE token_hash='unconsumed'`); err != nil {
+		t.Fatalf("consume legacy token: %v", err)
+	}
+	if err := d.QueryRow(`SELECT use_count FROM agent_enrollment_tokens WHERE token_hash='unconsumed'`).Scan(&useCount); err != nil {
+		t.Fatal(err)
+	}
+	if useCount != 1 {
+		t.Fatalf("legacy consumption count=%d", useCount)
+	}
+	if _, err := d.Exec(`UPDATE agent_enrollment_tokens SET consumed_at=5 WHERE token_hash='unconsumed'`); err == nil {
+		t.Fatal("legacy token consumed twice")
+	}
+}
+
 func assertGeoIndexUsable(t *testing.T, d *sql.DB) {
 	t.Helper()
 	rows, err := d.Query(`EXPLAIN QUERY PLAN SELECT node_id FROM nodes WHERE ip_geo_ip='8.8.8.8'`)
