@@ -21,6 +21,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 )
 
@@ -29,6 +31,8 @@ const (
 	serverValidity = 397 * 24 * time.Hour
 	agentValidity  = 90 * 24 * time.Hour
 )
+
+var ensureMu sync.Mutex
 
 // Manager owns the Panel's private CA, HTTPS identity, and independent command
 // signing key pair.
@@ -74,6 +78,11 @@ func Ensure(dataDir, publicURL string) (*Manager, error) {
 		CommandKeyFile:       filepath.Join(dir, "command-signing.key"),
 		CommandPublicKeyFile: filepath.Join(dir, "command-signing.pub"),
 	}
+	unlock, err := lockInitialization(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 
 	paths := []string{
 		m.CAKeyFile, m.CACertFile,
@@ -100,6 +109,30 @@ func Ensure(dataDir, publicURL string) (*Manager, error) {
 		return nil, err
 	}
 	return m, nil
+}
+
+func lockInitialization(dir string) (func(), error) {
+	ensureMu.Lock()
+	lockFile, err := os.OpenFile(filepath.Join(dir, ".init.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		ensureMu.Unlock()
+		return nil, fmt.Errorf("open PKI initialization lock: %w", err)
+	}
+	if err := lockFile.Chmod(0o600); err != nil {
+		lockFile.Close()
+		ensureMu.Unlock()
+		return nil, fmt.Errorf("secure PKI initialization lock: %w", err)
+	}
+	if err := syscall.Flock(int(lockFile.Fd()), syscall.LOCK_EX); err != nil {
+		lockFile.Close()
+		ensureMu.Unlock()
+		return nil, fmt.Errorf("lock PKI initialization: %w", err)
+	}
+	return func() {
+		_ = syscall.Flock(int(lockFile.Fd()), syscall.LOCK_UN)
+		_ = lockFile.Close()
+		ensureMu.Unlock()
+	}, nil
 }
 
 // TLSConfig returns a server TLS configuration which keeps browser and
@@ -294,6 +327,13 @@ func (m *Manager) load(host string) error {
 	caKey, err := readECPrivateKey(m.CAKeyFile)
 	if err != nil {
 		return err
+	}
+	caPublicKey, ok := caCert.PublicKey.(*ecdsa.PublicKey)
+	if !ok || caPublicKey.Curve != elliptic.P256() {
+		return errors.New("CA certificate public key must use ECDSA P-256")
+	}
+	if caKey.Curve != elliptic.P256() {
+		return errors.New("CA private key must use ECDSA P-256")
 	}
 	if !caCert.IsCA || !caKey.PublicKey.Equal(caCert.PublicKey) {
 		return errors.New("CA certificate and private key do not match")

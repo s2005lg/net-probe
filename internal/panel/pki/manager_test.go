@@ -11,8 +11,10 @@ import (
 	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/pem"
+	"math/big"
 	"net/url"
 	"os"
+	"sync"
 	"testing"
 	"time"
 )
@@ -90,6 +92,67 @@ func TestEnsureReloadsStableMaterialAndRejectsHostMismatch(t *testing.T) {
 
 	if _, err := Ensure(dir, "https://other.example.com:24443"); err == nil {
 		t.Fatal("accepted public URL not covered by existing certificate")
+	}
+}
+
+func TestEnsureRejectsCoherentNonP256CAOnReload(t *testing.T) {
+	dir := t.TempDir()
+	manager, err := Ensure(dir, "https://panel.example.com:24443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	replaceWithP384TrustSet(t, manager, "panel.example.com")
+
+	if _, err := Ensure(dir, "https://panel.example.com:24443"); err == nil {
+		t.Fatal("accepted a coherent P-384 CA trust set")
+	}
+}
+
+func TestEnsureConcurrentInitializationSharesOneTrustSet(t *testing.T) {
+	const callers = 32
+	dir := t.TempDir()
+	start := make(chan struct{})
+	type result struct {
+		manager *Manager
+		err     error
+	}
+	results := make(chan result, callers)
+	var wg sync.WaitGroup
+	for range callers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			manager, err := Ensure(dir, "https://panel.example.com:24443")
+			results <- result{manager: manager, err: err}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	fingerprint := ""
+	for result := range results {
+		if result.err != nil {
+			t.Errorf("concurrent Ensure() failed: %v", result.err)
+			continue
+		}
+		if fingerprint == "" {
+			fingerprint = result.manager.CAFingerprint()
+		}
+		if result.manager.CAFingerprint() != fingerprint {
+			t.Errorf("CA fingerprint = %q, want %q", result.manager.CAFingerprint(), fingerprint)
+		}
+	}
+	if fingerprint == "" {
+		t.Fatal("no concurrent initializer loaded a trust set")
+	}
+	final, err := Ensure(dir, "https://panel.example.com:24443")
+	if err != nil {
+		t.Fatalf("reload final trust set: %v", err)
+	}
+	if final.CAFingerprint() != fingerprint {
+		t.Fatalf("final CA fingerprint = %q, want %q", final.CAFingerprint(), fingerprint)
 	}
 }
 
@@ -230,6 +293,64 @@ func agentCSR(t *testing.T) ([]byte, *ecdsa.PublicKey) {
 		t.Fatal(err)
 	}
 	return der, &key.PublicKey
+}
+
+func replaceWithP384TrustSet(t *testing.T, manager *Manager, host string) {
+	t.Helper()
+	caKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(101),
+		Subject:               pkix.Name{CommonName: "non-P256 test CA"},
+		NotBefore:             now.Add(-time.Hour),
+		NotAfter:              now.Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(102),
+		NotBefore:    now.Add(-time.Hour),
+		NotAfter:     now.Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     []string{host},
+	}
+	serverDER, err := x509.CreateCertificate(rand.Reader, serverTemplate, caTemplate, &serverKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caKeyDER, err := x509.MarshalECPrivateKey(caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverKeyDER, err := x509.MarshalECPrivateKey(serverKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestPEM(t, manager.CAKeyFile, "EC PRIVATE KEY", caKeyDER, 0o600)
+	writeTestPEM(t, manager.CACertFile, "CERTIFICATE", caDER, 0o644)
+	writeTestPEM(t, manager.ServerKeyFile, "EC PRIVATE KEY", serverKeyDER, 0o600)
+	writeTestPEM(t, manager.ServerCertFile, "CERTIFICATE", serverDER, 0o644)
+}
+
+func writeTestPEM(t *testing.T, path, blockType string, der []byte, mode os.FileMode) {
+	t.Helper()
+	body := pem.EncodeToMemory(&pem.Block{Type: blockType, Bytes: der})
+	if err := os.WriteFile(path, body, mode); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
 }
 
 func parseLeaf(t *testing.T, path string) *x509.Certificate {
