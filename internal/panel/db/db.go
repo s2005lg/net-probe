@@ -21,6 +21,12 @@ func Migrate(d *sql.DB) error {
 		return err
 	}
 	defer tx.Rollback()
+	// Compatibility triggers from earlier releases can reject the cleanup below.
+	// Remove them transactionally, then reinstall the final guards after all rows
+	// have been normalized.
+	if err := dropEnrollmentTokenGuards(tx); err != nil {
+		return err
+	}
 	if _, err := tx.Exec(schema); err != nil {
 		return err
 	}
@@ -33,7 +39,10 @@ func Migrate(d *sql.DB) error {
 	if err := addMissingControlColumns(tx); err != nil {
 		return err
 	}
-	if err := addLegacyEnrollmentTokenUseCountGuards(tx); err != nil {
+	if err := normalizeLegacyEnrollmentTokenUseCount(tx); err != nil {
+		return err
+	}
+	if err := installEnrollmentTokenGuards(tx); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`CREATE INDEX IF NOT EXISTS idx_nodes_ip_geo_ip ON nodes(ip_geo_ip)`); err != nil {
@@ -134,7 +143,18 @@ func addMissingControlColumns(d sqlExecutor) error {
 	return err
 }
 
-func addLegacyEnrollmentTokenUseCountGuards(d sqlExecutor) error {
+func dropEnrollmentTokenGuards(d sqlExecutor) error {
+	_, err := d.Exec(`
+DROP TRIGGER IF EXISTS agent_enrollment_tokens_one_use_insert;
+DROP TRIGGER IF EXISTS agent_enrollment_tokens_one_use_update;
+DROP TRIGGER IF EXISTS agent_enrollment_tokens_consume_once;
+DROP TRIGGER IF EXISTS agent_enrollment_tokens_legacy_use_count_insert;
+DROP TRIGGER IF EXISTS agent_enrollment_tokens_legacy_use_count_update;
+DROP TRIGGER IF EXISTS agent_enrollment_tokens_legacy_use_count_on_consume;`)
+	return err
+}
+
+func normalizeLegacyEnrollmentTokenUseCount(d sqlExecutor) error {
 	var count int
 	if err := d.QueryRow(`SELECT count(*) FROM pragma_table_info('agent_enrollment_tokens') WHERE name='use_count'`).Scan(&count); err != nil {
 		return err
@@ -155,18 +175,43 @@ func addLegacyEnrollmentTokenUseCountGuards(d sqlExecutor) error {
 		WHERE use_count<>CASE WHEN consumed_at>0 THEN 1 ELSE 0 END`); err != nil {
 		return err
 	}
+	return nil
+}
+
+func installEnrollmentTokenGuards(d sqlExecutor) error {
+	if _, err := d.Exec(`
+CREATE TRIGGER agent_enrollment_tokens_one_use_insert
+BEFORE INSERT ON agent_enrollment_tokens WHEN NEW.use_limit <> 1
+BEGIN SELECT RAISE(ABORT, 'enrollment tokens are single-use'); END;
+CREATE TRIGGER agent_enrollment_tokens_one_use_update
+BEFORE UPDATE OF use_limit ON agent_enrollment_tokens WHEN NEW.use_limit <> 1
+BEGIN SELECT RAISE(ABORT, 'enrollment tokens are single-use'); END;
+CREATE TRIGGER agent_enrollment_tokens_consume_once
+BEFORE UPDATE OF consumed_at ON agent_enrollment_tokens
+WHEN OLD.consumed_at <> 0 OR NEW.consumed_at <= 0
+BEGIN SELECT RAISE(ABORT, 'enrollment token already consumed'); END;`); err != nil {
+		return err
+	}
+
+	var count int
+	if err := d.QueryRow(`SELECT count(*) FROM pragma_table_info('agent_enrollment_tokens') WHERE name='use_count'`).Scan(&count); err != nil {
+		return err
+	}
+	if count == 0 {
+		return nil
+	}
 	_, err := d.Exec(`
-CREATE TRIGGER IF NOT EXISTS agent_enrollment_tokens_legacy_use_count_insert
+CREATE TRIGGER agent_enrollment_tokens_legacy_use_count_insert
 BEFORE INSERT ON agent_enrollment_tokens
 WHEN NEW.use_count NOT IN (0,1) OR NEW.use_count>NEW.use_limit
 	OR (NEW.use_count=0 AND NEW.consumed_at<>0) OR (NEW.use_count=1 AND NEW.consumed_at<=0)
 BEGIN SELECT RAISE(ABORT, 'invalid enrollment token use count'); END;
-CREATE TRIGGER IF NOT EXISTS agent_enrollment_tokens_legacy_use_count_update
+CREATE TRIGGER agent_enrollment_tokens_legacy_use_count_update
 BEFORE UPDATE OF use_count ON agent_enrollment_tokens
 WHEN NEW.use_count NOT IN (0,1) OR NEW.use_count>NEW.use_limit
 	OR (NEW.use_count=0 AND NEW.consumed_at<>0) OR (NEW.use_count=1 AND NEW.consumed_at<=0)
 BEGIN SELECT RAISE(ABORT, 'invalid enrollment token use count'); END;
-CREATE TRIGGER IF NOT EXISTS agent_enrollment_tokens_legacy_use_count_on_consume
+CREATE TRIGGER agent_enrollment_tokens_legacy_use_count_on_consume
 AFTER UPDATE OF consumed_at ON agent_enrollment_tokens
 WHEN NEW.consumed_at>0 AND NEW.use_count=0
 BEGIN UPDATE agent_enrollment_tokens SET use_count=1 WHERE id=NEW.id; END;`)
@@ -215,18 +260,6 @@ CREATE TABLE IF NOT EXISTS agent_enrollment_tokens(
 	use_limit INTEGER NOT NULL DEFAULT 1 CHECK(use_limit = 1),
 	label TEXT NOT NULL DEFAULT ''
 );
-CREATE TRIGGER IF NOT EXISTS agent_enrollment_tokens_one_use_insert
-BEFORE INSERT ON agent_enrollment_tokens WHEN NEW.use_limit <> 1
-BEGIN SELECT RAISE(ABORT, 'enrollment tokens are single-use'); END;
-CREATE TRIGGER IF NOT EXISTS agent_enrollment_tokens_one_use_update
-BEFORE UPDATE OF use_limit ON agent_enrollment_tokens WHEN NEW.use_limit <> 1
-BEGIN SELECT RAISE(ABORT, 'enrollment tokens are single-use'); END;
-CREATE TRIGGER IF NOT EXISTS agent_enrollment_tokens_consume_once
-BEFORE UPDATE OF consumed_at ON agent_enrollment_tokens
-WHEN OLD.consumed_at > 0
-	OR (OLD.consumed_at = 0 AND NEW.consumed_at <= 0)
-	OR (OLD.consumed_at < 0 AND NEW.consumed_at <> 0)
-BEGIN SELECT RAISE(ABORT, 'enrollment token already consumed'); END;
 CREATE TABLE IF NOT EXISTS agent_commands(
 	command_id TEXT PRIMARY KEY,
 	agent_id TEXT NOT NULL,

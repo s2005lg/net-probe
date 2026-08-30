@@ -233,11 +233,35 @@ CREATE TABLE agent_enrollment_tokens(
 	label TEXT NOT NULL DEFAULT ''
 );
 INSERT INTO agent_enrollment_tokens(token_hash,created_by_user_id,created_at,expires_at,consumed_at,use_limit,use_count,label)
-VALUES('unconsumed',1,1,2,0,1,0,'preserve'),('consumed',1,1,2,3,2,2,'normalize'),('negative',1,1,2,-1,1,1,'normalize-negative');`); err != nil {
+VALUES('unconsumed',1,1,2,0,1,0,'preserve'),('consumed',1,1,2,3,2,2,'normalize'),('negative',1,1,2,-1,1,0,'normalize-negative');
+CREATE TRIGGER agent_enrollment_tokens_one_use_insert
+BEFORE INSERT ON agent_enrollment_tokens WHEN NEW.use_limit <> 1
+BEGIN SELECT RAISE(ABORT, 'enrollment tokens are single-use'); END;
+CREATE TRIGGER agent_enrollment_tokens_one_use_update
+BEFORE UPDATE OF use_limit ON agent_enrollment_tokens WHEN NEW.use_limit <> 1
+BEGIN SELECT RAISE(ABORT, 'enrollment tokens are single-use'); END;
+CREATE TRIGGER agent_enrollment_tokens_consume_once
+BEFORE UPDATE OF consumed_at ON agent_enrollment_tokens
+WHEN OLD.consumed_at <> 0 OR NEW.consumed_at <= 0
+BEGIN SELECT RAISE(ABORT, 'enrollment token already consumed'); END;
+CREATE TRIGGER agent_enrollment_tokens_legacy_use_count_insert
+BEFORE INSERT ON agent_enrollment_tokens
+WHEN NEW.use_count NOT IN (0,1) OR NEW.use_count>NEW.use_limit
+	OR (NEW.use_count=0 AND NEW.consumed_at<>0) OR (NEW.use_count=1 AND NEW.consumed_at<=0)
+BEGIN SELECT RAISE(ABORT, 'invalid enrollment token use count'); END;
+CREATE TRIGGER agent_enrollment_tokens_legacy_use_count_update
+BEFORE UPDATE OF use_count ON agent_enrollment_tokens
+WHEN NEW.use_count NOT IN (0,1) OR NEW.use_count>NEW.use_limit
+	OR (NEW.use_count=0 AND NEW.consumed_at<>0) OR (NEW.use_count=1 AND NEW.consumed_at<=0)
+BEGIN SELECT RAISE(ABORT, 'invalid enrollment token use count'); END;
+CREATE TRIGGER agent_enrollment_tokens_legacy_use_count_on_consume
+AFTER UPDATE OF consumed_at ON agent_enrollment_tokens
+WHEN NEW.consumed_at>0 AND NEW.use_count=0
+BEGIN UPDATE agent_enrollment_tokens SET use_count=1 WHERE id=NEW.id; END;`); err != nil {
 		t.Fatal(err)
 	}
-	if err := Migrate(d); err != nil {
-		t.Fatal(err)
+	if _, err := d.Exec(`UPDATE agent_enrollment_tokens SET consumed_at=0 WHERE token_hash='negative'`); err == nil {
+		t.Fatal("legacy consume-once trigger did not reject negative timestamp normalization")
 	}
 	if err := Migrate(d); err != nil {
 		t.Fatal(err)
@@ -297,6 +321,9 @@ VALUES('unconsumed',1,1,2,0,1,0,'preserve'),('consumed',1,1,2,3,2,2,'normalize')
 	}
 	if _, err := d.Exec(`UPDATE agent_enrollment_tokens SET consumed_at=7 WHERE token_hash='negative'`); err == nil {
 		t.Fatal("normalized negative token consumed twice")
+	}
+	if err := Migrate(d); err != nil {
+		t.Fatalf("second migrate: %v", err)
 	}
 }
 
