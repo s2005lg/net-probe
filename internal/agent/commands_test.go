@@ -102,6 +102,7 @@ func TestExecutorRejectsForgeryTargetFutureAndChangedDuplicate(t *testing.T) {
 		t.Fatalf("wrong target=%+v", result)
 	}
 	future := signedExecutorCommand(t, private, 2, controlproto.CollectNow, `{}`)
+	future.CommandID = "123e4567-e89b-42d3-a456-426614174042"
 	future.IssuedAt = time.Now().Add(61 * time.Second).Unix()
 	future.ExpiresAt = future.IssuedAt + 300
 	if err := controlproto.SignCommand(private, &future); err != nil {
@@ -188,5 +189,38 @@ func TestExecutorPersistsRunningOutcomeAndResumesAfterRestart(t *testing.T) {
 	}
 	if result := second.Execute(context.Background(), command); result.State != "succeeded" || result.Code != "upgrade_applied" || second.HighestCompleted() != 1 {
 		t.Fatalf("resumed result=%+v highest=%d", result, second.HighestCompleted())
+	}
+}
+
+func TestExecutorResumesAcceptedCommandAfterItsOriginalTTL(t *testing.T) {
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateDir := t.TempDir()
+	var finished atomic.Bool
+	handler := func(context.Context, json.RawMessage, string) CommandOutcome {
+		if !finished.Load() {
+			return CommandOutcome{Code: "upgrade_staged", Pending: true}
+		}
+		return CommandOutcome{Code: "upgrade_applied"}
+	}
+	first, err := OpenCommandExecutor(stateDir, executorAgentID, public, map[controlproto.Action]CommandHandler{controlproto.Upgrade: handler})
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := signedExecutorCommand(t, private, 1, controlproto.Upgrade, `{}`)
+	if result := first.Execute(context.Background(), command); result.State != "running" {
+		t.Fatalf("staged result=%+v", result)
+	}
+
+	finished.Store(true)
+	second, err := OpenCommandExecutor(stateDir, executorAgentID, public, map[controlproto.Action]CommandHandler{controlproto.Upgrade: handler})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second.now = func() time.Time { return time.Unix(command.ExpiresAt+1, 0) }
+	if result := second.Execute(context.Background(), command); result.State != "succeeded" || result.Code != "upgrade_applied" {
+		t.Fatalf("resumed expired command=%+v", result)
 	}
 }

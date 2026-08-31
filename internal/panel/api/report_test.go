@@ -230,3 +230,22 @@ func TestReportRejectsNodeIDDifferentFromCertificateBoundIdentity(t *testing.T) 
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
 	}
 }
+
+func TestReportDoesNotAcknowledgeWhenIdentityVersionCannotBeRecorded(t *testing.T) {
+	d, cfg := openTestDB(t)
+	s := New(d, cfg)
+	body := `{"schema_version":"1","agent_version":"v1.2.4","node_id":"node-current","host":{},"services":[]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/report", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	s.handleReport(rr, req, AgentIdentity{AgentID: "missing-agent", NodeID: "node-current", Serial: "missing-serial"})
+	if rr.Code != http.StatusConflict || strings.Contains(rr.Body.String(), `"ack":true`) {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var nodes int
+	if err := d.QueryRow(`SELECT COUNT(*) FROM nodes WHERE node_id='node-current'`).Scan(&nodes); err != nil {
+		t.Fatal(err)
+	}
+	if nodes != 0 {
+		t.Fatalf("unacknowledged report was partially committed")
+	}
+}

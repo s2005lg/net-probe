@@ -2,7 +2,11 @@ package update
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -115,6 +119,85 @@ func TestApplyVerifiedUpdateDoesNotSwitchOnInstallOrInitialSwitchFailure(t *test
 			}
 			if system.current != "/opt/net-probe/versions/v1.2.3/net-probe" {
 				t.Fatalf("current=%q", system.current)
+			}
+		})
+	}
+}
+
+func TestProcessPendingUpdateQuarantinesValidationFailureAndWritesTerminalResult(t *testing.T) {
+	dir := t.TempDir()
+	request, validation := validUpdateRequest(t, dir)
+	artifactPath := filepath.Join(dir, request.ArtifactBasename)
+	if err := os.WriteFile(artifactPath, []byte("changed artifact"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(request)
+	if err := os.WriteFile(filepath.Join(dir, PendingRequestFile), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	directory, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer directory.Close()
+	system := &fakeHelperSystem{}
+	err = processPendingUpdate(context.Background(), RootHelperOptions{
+		PublicKey: validation.PublicKey, CurrentVersion: validation.CurrentVersion,
+		CommandPublicKey: validation.CommandPublicKey,
+		ControlVersion:   validation.ControlVersion, AgentID: validation.AgentID,
+		AgentUID: validation.ExpectedUID, AgentGID: validation.ExpectedGID, Now: validation.Now,
+	}, directory, system)
+	if err == nil {
+		t.Fatal("invalid artifact was accepted")
+	}
+	if _, err := os.Stat(filepath.Join(dir, PendingRequestFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("pending request still triggers path unit: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, RejectedRequestFile)); err != nil {
+		t.Fatalf("rejected request was not quarantined: %v", err)
+	}
+	if len(system.writtenResult) != 1 || system.writtenResult[0].State != "failed" ||
+		system.writtenResult[0].Code != "upgrade_rejected" || system.writtenResult[0].CommandID != request.CommandID {
+		t.Fatalf("written result=%+v runtime=%s", system.writtenResult, runtime.GOOS)
+	}
+}
+
+func TestUpgradeProofMustMatchKernelBootID(t *testing.T) {
+	expected := UpgradeProof{Version: "v1.2.4", AgentID: "agent", CommandID: "command"}
+	proof := expected
+	proof.BootID = "boot-current"
+	if !validUpgradeProof(proof, expected, "boot-current") {
+		t.Fatal("matching proof was rejected")
+	}
+	if validUpgradeProof(proof, expected, "boot-previous") || validUpgradeProof(proof, expected, "") {
+		t.Fatal("stale or empty boot ID was accepted")
+	}
+}
+
+func TestProcessPendingUpdateIgnoresMissingAndDoesNotCorrelateMalformedRequest(t *testing.T) {
+	for name, createMalformed := range map[string]bool{"missing": false, "malformed": true} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if createMalformed {
+				if err := os.WriteFile(filepath.Join(dir, PendingRequestFile), []byte(`{"command_id":`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			directory, err := os.Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer directory.Close()
+			system := &fakeHelperSystem{}
+			err = processPendingUpdate(context.Background(), RootHelperOptions{AgentUID: os.Getuid(), AgentGID: os.Getgid()}, directory, system)
+			if !createMalformed && err != nil {
+				t.Fatalf("missing pending request err=%v", err)
+			}
+			if createMalformed && err == nil {
+				t.Fatal("malformed request was accepted")
+			}
+			if len(system.writtenResult) != 0 {
+				t.Fatalf("uncorrelated result was written: %+v", system.writtenResult)
 			}
 		})
 	}

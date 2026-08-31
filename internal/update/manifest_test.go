@@ -95,6 +95,11 @@ func TestVerifyManifestRejectsSignatureTimeAndCompatibilityFailures(t *testing.T
 	if err := VerifyManifest(public, signed, opts); !errors.Is(err, ErrPanelVersion) {
 		t.Fatalf("Panel err=%v", err)
 	}
+	opts = validVerifyOptions(artifact)
+	opts.PanelVersion = ""
+	if err := VerifyManifest(public, signed, opts); !errors.Is(err, ErrPanelVersion) {
+		t.Fatalf("missing Panel version err=%v", err)
+	}
 }
 
 func TestVerifyManifestRejectsArtifactAndURLViolations(t *testing.T) {

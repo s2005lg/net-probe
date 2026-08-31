@@ -110,11 +110,9 @@ func VerifyManifest(publicKey ed25519.PublicKey, signed SignedManifest, options 
 	if !ok {
 		return ErrPanelVersion
 	}
-	if options.PanelVersion != "" {
-		panel, ok := parseSemver(options.PanelVersion)
-		if !ok || compareVersion(panel, minimumPanel) < 0 {
-			return ErrPanelVersion
-		}
+	panel, ok := parseSemver(options.PanelVersion)
+	if !ok || compareVersion(panel, minimumPanel) < 0 {
+		return ErrPanelVersion
 	}
 	now := options.Now
 	if now.IsZero() {

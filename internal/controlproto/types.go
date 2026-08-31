@@ -58,6 +58,9 @@ type Welcome struct {
 	HeartbeatSeconds int    `json:"heartbeat_seconds"`
 	OfflineSeconds   int    `json:"offline_seconds"`
 	MaxMessageBytes  int    `json:"max_message_bytes"`
+	PanelVersion     string `json:"panel_version"`
+	AgentVersion     string `json:"agent_version"`
+	BootID           string `json:"boot_id"`
 	NextSequence     uint64 `json:"next_sequence,omitempty"`
 }
 

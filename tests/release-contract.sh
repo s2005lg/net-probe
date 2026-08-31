@@ -18,6 +18,12 @@ contains .github/workflows/release.yml "sha256sum net-probe_linux_amd64 net-prob
 contains .github/workflows/release.yml "sha256sum --check SHA256SUMS"
 contains .github/workflows/release.yml "npm run verify"
 contains .github/workflows/release.yml 'NET_PROBE_RELEASE_SIGNING_KEY_B64: ${{ secrets.NET_PROBE_RELEASE_SIGNING_KEY_B64 }}'
+if [ "$(grep -Fc -- 'NET_PROBE_RELEASE_SIGNING_KEY_B64: ${{ secrets.NET_PROBE_RELEASE_SIGNING_KEY_B64 }}' .github/workflows/release.yml)" -ne 2 ]; then
+  fail "release signing key must be scoped only to the two signing steps"
+fi
+if grep -q '^    env:' .github/workflows/release.yml; then
+  fail "release signing key must not be exposed at job scope"
+fi
 contains .github/workflows/release.yml "go run ./cmd/net-probe-release -print-public-key"
 contains .github/workflows/release.yml "-X main.releasePublicKeyHex="
 contains .github/workflows/release.yml "net-probe_linux_amd64.manifest.json"

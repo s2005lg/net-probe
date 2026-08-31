@@ -2,7 +2,8 @@
 Description=Watch for a verified net-probe Agent update request
 
 [Path]
-PathExists=/var/lib/net-probe/updates/pending.json
+PathExists=/var/lib/net-probe-updates/pending.json
+PathExists=/var/lib/net-probe-updates/claimed.json
 Unit=net-probe-update.service
 
 [Install]

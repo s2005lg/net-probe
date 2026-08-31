@@ -33,7 +33,7 @@ func TestControlClientConnectsWithMTLSAndSendsHeartbeat(t *testing.T) {
 	var heartbeats atomic.Int32
 	var welcomes atomic.Int32
 	client.onHeartbeat = func(controlproto.Heartbeat) { heartbeats.Add(1) }
-	client.options.OnWelcome = func() { welcomes.Add(1) }
+	client.options.OnWelcome = func(controlproto.Welcome) { welcomes.Add(1) }
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- client.Run(ctx) }()
@@ -105,5 +105,20 @@ func TestCommandWorkerQueuesWithoutBlockingAndExecutesSerially(t *testing.T) {
 	}
 	if maximum.Load() != 1 {
 		t.Fatalf("maximum concurrent commands=%d", maximum.Load())
+	}
+}
+
+func TestWelcomeMustEchoAuthenticatedAgentVersionAndBootID(t *testing.T) {
+	hello := controlproto.Hello{AgentVersion: "v1.2.3", BootID: "boot-current"}
+	welcome := controlproto.Welcome{
+		SessionID: "session", HeartbeatSeconds: 30, OfflineSeconds: 90, MaxMessageBytes: controlproto.MaxMessageBytes,
+		PanelVersion: "v1.2.3", AgentVersion: hello.AgentVersion, BootID: hello.BootID,
+	}
+	if !validWelcome(welcome, hello) {
+		t.Fatal("matching welcome was rejected")
+	}
+	welcome.BootID = "boot-stale"
+	if validWelcome(welcome, hello) {
+		t.Fatal("welcome for a different boot was accepted")
 	}
 }

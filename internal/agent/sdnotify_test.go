@@ -56,4 +56,8 @@ func TestSDNotifyIsNoopWithoutSocket(t *testing.T) {
 	if err := NotifyReady(); err != nil {
 		t.Fatal(err)
 	}
+	confirmed, err := NotifyReadyConfirmed()
+	if err != nil || confirmed {
+		t.Fatalf("confirmed=%v err=%v", confirmed, err)
+	}
 }

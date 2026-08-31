@@ -38,20 +38,35 @@ type UpgradeManager struct {
 }
 
 type upgradePayload struct {
-	Manifest  npupdate.Manifest `json:"manifest"`
-	Signature string            `json:"signature"`
+	Manifest     npupdate.Manifest `json:"manifest"`
+	Signature    string            `json:"signature"`
+	PanelVersion string            `json:"panel_version"`
 }
 
 func NewUpgradeManager(stateDir string, identity *Identity, currentVersion string, client *http.Client) (*UpgradeManager, error) {
 	if stateDir == "" || identity == nil || !validCanonicalUUID(identity.AgentID) || len(identity.ReleaseKey) != ed25519.PublicKeySize || currentVersion == "" {
 		return nil, errors.New("upgrade manager requires state, identity, release key, and version")
 	}
-	dir := filepath.Join(stateDir, "updates")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, err
+	dir := os.Getenv("NET_PROBE_UPDATE_DIRECTORY")
+	externalDirectory := dir != ""
+	if !externalDirectory {
+		dir = filepath.Join(stateDir, "updates")
 	}
-	if err := os.Chmod(dir, 0o700); err != nil {
-		return nil, err
+	if !filepath.IsAbs(dir) || filepath.Clean(dir) == "/" {
+		return nil, errors.New("upgrade directory must be an absolute path")
+	}
+	if externalDirectory {
+		info, err := os.Lstat(dir)
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0o770 {
+			return nil, errors.New("root-managed upgrade directory is unavailable or has unsafe mode")
+		}
+	} else {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, err
+		}
+		if err := os.Chmod(dir, 0o700); err != nil {
+			return nil, err
+		}
 	}
 	if client == nil {
 		client = &http.Client{Timeout: 45 * time.Second}
@@ -80,6 +95,16 @@ func (m *UpgradeManager) Handle(ctx context.Context, raw json.RawMessage, comman
 	if err := controlproto.StrictDecodePayload(raw, &payload); err != nil || !validCanonicalUUID(commandID) {
 		return failure("invalid_payload")
 	}
+	command, ok := commandEnvelopeFromContext(ctx)
+	if !ok || command.Action != controlproto.Upgrade || command.CommandID != commandID || !bytes.Equal(command.Payload, raw) {
+		return failure("invalid_command_envelope")
+	}
+	m.readinessMu.Lock()
+	panelVersion := m.panelVersion
+	m.readinessMu.Unlock()
+	if payload.PanelVersion == "" || payload.PanelVersion != panelVersion {
+		return failure("panel_version_mismatch")
+	}
 	signature, err := base64.StdEncoding.DecodeString(payload.Signature)
 	if err != nil || len(signature) != ed25519.SignatureSize || base64.StdEncoding.EncodeToString(signature) != payload.Signature {
 		return failure("invalid_release")
@@ -88,7 +113,7 @@ func (m *UpgradeManager) Handle(ctx context.Context, raw json.RawMessage, comman
 		return outcome
 	}
 	if err := npupdate.VerifyManifest(m.identity.ReleaseKey, npupdate.SignedManifest{Manifest: payload.Manifest, Signature: signature}, npupdate.VerifyOptions{
-		CurrentVersion: m.currentVersion, PanelVersion: m.panelVersion, OS: runtime.GOOS, Arch: runtime.GOARCH,
+		CurrentVersion: m.currentVersion, PanelVersion: panelVersion, OS: runtime.GOOS, Arch: runtime.GOARCH,
 		ControlVersion: controlproto.Version, Now: m.now(),
 	}); err != nil {
 		return failure("invalid_release")
@@ -98,7 +123,7 @@ func (m *UpgradeManager) Handle(ctx context.Context, raw json.RawMessage, comman
 		return failure("download_failed")
 	}
 	if err := npupdate.VerifyManifest(m.identity.ReleaseKey, npupdate.SignedManifest{Manifest: payload.Manifest, Signature: signature}, npupdate.VerifyOptions{
-		CurrentVersion: m.currentVersion, PanelVersion: m.panelVersion, OS: runtime.GOOS, Arch: runtime.GOARCH,
+		CurrentVersion: m.currentVersion, PanelVersion: panelVersion, OS: runtime.GOOS, Arch: runtime.GOARCH,
 		ControlVersion: controlproto.Version, Artifact: artifact, Now: m.now(),
 	}); err != nil {
 		return failure("artifact_verification_failed")
@@ -110,7 +135,7 @@ func (m *UpgradeManager) Handle(ctx context.Context, raw json.RawMessage, comman
 	}
 	request := npupdate.UpdateRequest{
 		ArtifactBasename: basename, Manifest: payload.Manifest, Signature: payload.Signature,
-		PreviousVersion: m.currentVersion, AgentID: m.identity.AgentID, CommandID: commandID,
+		PreviousVersion: m.currentVersion, AgentID: m.identity.AgentID, CommandID: commandID, Command: command,
 	}
 	requestBody, err := json.Marshal(request)
 	if err != nil {
@@ -131,8 +156,7 @@ func (m *UpgradeManager) existingOutcome(ctx context.Context, commandID, version
 	if outcome, handled := m.helperOutcome(commandID, version); handled {
 		return outcome, true
 	}
-	pendingPath := filepath.Join(m.dir, npupdate.PendingRequestFile)
-	if body, err := os.ReadFile(pendingPath); err == nil {
+	if body, _, err := m.readActiveRequest(); err == nil {
 		request, decodeErr := npupdate.DecodeUpdateRequest(body)
 		if decodeErr != nil {
 			return CommandOutcome{Code: "pending_request_invalid", Data: json.RawMessage(`{}`), Failed: true}, true
@@ -149,11 +173,23 @@ func (m *UpgradeManager) helperOutcome(commandID, version string) (CommandOutcom
 	resultPath := filepath.Join(m.dir, npupdate.HelperResultFile)
 	if body, err := os.ReadFile(resultPath); err == nil {
 		var result npupdate.HelperResult
-		if decodeStrictBytes(body, &result) != nil || result.CommandID == "" {
+		if decodeStrictBytes(body, &result) != nil {
+			return CommandOutcome{Code: "helper_result_invalid", Data: json.RawMessage(`{}`), Failed: true}, true
+		}
+		if result.State == "failed" && result.Code == "upgrade_rejected" && (result.CommandID == "" || result.CommandID == commandID) {
+			if result.CommandID != "" && (result.Version != version || result.PreviousVersion != m.currentVersion) {
+				return CommandOutcome{Code: "helper_result_invalid", Data: json.RawMessage(`{}`), Failed: true}, true
+			}
+			return CommandOutcome{
+				Code: "upgrade_rejected", Data: json.RawMessage(`{}`), Failed: true,
+				AfterPersist: func() { m.cleanupRejected(commandID) },
+			}, true
+		}
+		if result.CommandID == "" {
 			return CommandOutcome{Code: "helper_result_invalid", Data: json.RawMessage(`{}`), Failed: true}, true
 		}
 		if result.CommandID == commandID {
-			pendingBody, pendingErr := os.ReadFile(filepath.Join(m.dir, npupdate.PendingRequestFile))
+			pendingBody, _, pendingErr := m.readActiveRequest()
 			pending, decodeErr := npupdate.DecodeUpdateRequest(pendingBody)
 			validCurrent := (result.State == "succeeded" && m.currentVersion == result.Version) ||
 				(result.State == "failed" && m.currentVersion == result.PreviousVersion)
@@ -177,6 +213,27 @@ func (m *UpgradeManager) helperOutcome(commandID, version string) (CommandOutcom
 	return CommandOutcome{}, false
 }
 
+func (m *UpgradeManager) cleanupRejected(commandID string) {
+	rejectedPath := filepath.Join(m.dir, npupdate.RejectedRequestFile)
+	if body, err := os.ReadFile(rejectedPath); err == nil {
+		if request, decodeErr := npupdate.DecodeUpdateRequest(body); decodeErr == nil &&
+			(request.CommandID == commandID || !validCanonicalUUID(request.CommandID)) && safeUpgradeBasename(request.ArtifactBasename) {
+			_ = os.Remove(filepath.Join(m.dir, request.ArtifactBasename))
+		}
+		_ = os.Remove(rejectedPath)
+	}
+	for _, name := range []string{npupdate.PendingRequestFile, npupdate.ClaimedRequestFile} {
+		path := filepath.Join(m.dir, name)
+		if body, err := os.ReadFile(path); err == nil {
+			if request, decodeErr := npupdate.DecodeUpdateRequest(body); decodeErr == nil && request.CommandID == commandID {
+				_ = os.Remove(path)
+			}
+		}
+	}
+	_ = os.Remove(filepath.Join(m.dir, npupdate.HelperResultFile))
+	_ = syncDirectory(m.dir)
+}
+
 func (m *UpgradeManager) waitForHelper(ctx context.Context, commandID, version string) CommandOutcome {
 	timer := time.NewTimer(125 * time.Second)
 	defer timer.Stop()
@@ -197,8 +254,7 @@ func (m *UpgradeManager) waitForHelper(ctx context.Context, commandID, version s
 }
 
 func (m *UpgradeManager) cleanupCompleted(commandID string) bool {
-	pendingPath := filepath.Join(m.dir, npupdate.PendingRequestFile)
-	body, err := os.ReadFile(pendingPath)
+	body, activePath, err := m.readActiveRequest()
 	if err != nil {
 		return errors.Is(err, os.ErrNotExist)
 	}
@@ -207,8 +263,30 @@ func (m *UpgradeManager) cleanupCompleted(commandID string) bool {
 		return false
 	}
 	_ = os.Remove(filepath.Join(m.dir, request.ArtifactBasename))
-	_ = os.Remove(pendingPath)
+	_ = os.Remove(activePath)
+	duplicatePath := filepath.Join(m.dir, npupdate.PendingRequestFile)
+	if duplicatePath != activePath {
+		if duplicateBody, readErr := os.ReadFile(duplicatePath); readErr == nil {
+			if duplicate, decodeErr := npupdate.DecodeUpdateRequest(duplicateBody); decodeErr == nil && duplicate.CommandID == commandID {
+				_ = os.Remove(duplicatePath)
+			}
+		}
+	}
 	return true
+}
+
+func (m *UpgradeManager) readActiveRequest() ([]byte, string, error) {
+	for _, name := range []string{npupdate.ClaimedRequestFile, npupdate.PendingRequestFile} {
+		path := filepath.Join(m.dir, name)
+		body, err := os.ReadFile(path)
+		if err == nil {
+			return body, path, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, "", err
+		}
+	}
+	return nil, "", os.ErrNotExist
 }
 
 func (m *UpgradeManager) cleanupCommand(commandID string) {
@@ -275,6 +353,15 @@ func safeUpgradeBasename(value string) bool {
 func (m *UpgradeManager) MarkSystemReady()  { m.markReady("system") }
 func (m *UpgradeManager) MarkControlReady() { m.markReady("control") }
 func (m *UpgradeManager) MarkReportReady()  { m.markReady("report") }
+
+func (m *UpgradeManager) SetPanelVersion(version string) {
+	if m == nil || version == "" || len(version) > 128 {
+		return
+	}
+	m.readinessMu.Lock()
+	m.panelVersion = version
+	m.readinessMu.Unlock()
+}
 
 func (m *UpgradeManager) markReady(signal string) {
 	if m == nil {

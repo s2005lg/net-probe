@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"database/sql"
 	"encoding/json"
 	"encoding/pem"
 	"io"
@@ -25,6 +26,7 @@ type controlFixture struct {
 	url    string
 	client *http.Client
 	hub    *panelcontrol.Hub
+	db     *sql.DB
 	agent  registeredAgent
 }
 
@@ -42,6 +44,7 @@ func startControlFixture(t *testing.T) controlFixture {
 	}
 	d, cfg := openTestDB(t)
 	server := New(d, cfg)
+	server.PanelVersion = "v1.2.3"
 	release, _, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -73,7 +76,7 @@ func startControlFixture(t *testing.T) controlFixture {
 	client := tlsHTTPClient(certPool(t, manager.CACertFile), func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
 		return &certificate, nil
 	})
-	return controlFixture{url: "wss://" + host + "/api/v1/agents/control", client: client, hub: hub, agent: agent}
+	return controlFixture{url: "wss://" + host + "/api/v1/agents/control", client: client, hub: hub, db: d, agent: agent}
 }
 
 func dialControl(t *testing.T, fixture controlFixture) *websocket.Conn {
@@ -113,8 +116,16 @@ func TestControlRequiresMatchingHelloAndReturnsWelcome(t *testing.T) {
 	if err := controlproto.StrictDecode(response, &welcome); err != nil {
 		t.Fatal(err)
 	}
-	if welcome.SessionID == "" || welcome.HeartbeatSeconds != 30 || !fixture.hub.IsOnline(authAgentID) {
+	if welcome.SessionID == "" || welcome.HeartbeatSeconds != 30 || welcome.PanelVersion != "v1.2.3" ||
+		welcome.AgentVersion != hello.AgentVersion || welcome.BootID != hello.BootID || !fixture.hub.IsOnline(authAgentID) {
 		t.Fatalf("welcome=%+v online=%v", welcome, fixture.hub.IsOnline(authAgentID))
+	}
+	var storedBootID string
+	if err := fixture.db.QueryRow(`SELECT boot_id FROM agent_identities WHERE agent_id=?`, fixture.agent.identity.AgentID).Scan(&storedBootID); err != nil {
+		t.Fatal(err)
+	}
+	if storedBootID != hello.BootID {
+		t.Fatalf("stored boot ID=%q", storedBootID)
 	}
 }
 

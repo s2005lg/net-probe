@@ -101,6 +101,7 @@ func startEnrollmentPanel(t *testing.T) liveEnrollmentPanel {
 		t.Fatal(err)
 	}
 	server := panelapi.New(d, cfg)
+	server.PanelVersion = "v1.2.3"
 	server.ConfigureAgentPKI(manager, panelapi.StaticReleasePublicKey(release))
 	code := "test-enrollment-code-with-256-bits-placeholder"
 	hash := sha256.Sum256([]byte(code))

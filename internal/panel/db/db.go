@@ -114,6 +114,7 @@ func addMissingControlColumns(d sqlExecutor) error {
 		{table: "users", name: "role", def: "TEXT NOT NULL DEFAULT 'viewer' CHECK(role IN ('viewer','operator','admin'))"},
 		{table: "sessions", name: "session_id", def: "TEXT NOT NULL DEFAULT ''"},
 		{table: "sessions", name: "reauthenticated_at", def: "INTEGER NOT NULL DEFAULT 0"},
+		{table: "agent_identities", name: "boot_id", def: "TEXT NOT NULL DEFAULT ''"},
 	} {
 		var count int
 		if err := d.QueryRow(`SELECT count(*) FROM pragma_table_info(?) WHERE name=?`, change.table, change.name).Scan(&count); err != nil {
@@ -246,6 +247,7 @@ CREATE TABLE IF NOT EXISTS agent_identities(
 	os TEXT NOT NULL DEFAULT '',
 	arch TEXT NOT NULL DEFAULT '',
 	capabilities_json TEXT NOT NULL DEFAULT '[]',
+	boot_id TEXT NOT NULL DEFAULT '',
 	created_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL
 );

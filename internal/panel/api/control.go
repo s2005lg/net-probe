@@ -100,8 +100,8 @@ func (s *Server) handleControl(w http.ResponseWriter, r *http.Request, identity 
 
 	capabilities, _ := json.Marshal(hello.Capabilities)
 	now := time.Now().Unix()
-	if _, err := s.db.Exec(`UPDATE agent_identities SET last_connected_at=?,last_heartbeat_at=?,disconnect_reason='',agent_version=?,os=?,arch=?,capabilities_json=?,updated_at=? WHERE agent_id=? AND cert_serial=?`,
-		now, now, hello.AgentVersion, hello.OS, hello.Arch, string(capabilities), now, identity.AgentID, identity.Serial); err != nil {
+	if _, err := s.db.Exec(`UPDATE agent_identities SET last_connected_at=?,last_heartbeat_at=?,disconnect_reason='',agent_version=?,os=?,arch=?,capabilities_json=?,boot_id=?,updated_at=? WHERE agent_id=? AND cert_serial=?`,
+		now, now, hello.AgentVersion, hello.OS, hello.Arch, string(capabilities), hello.BootID, now, identity.AgentID, identity.Serial); err != nil {
 		disconnectReason = "db_error"
 		_ = connection.Close(websocket.StatusInternalError, disconnectReason)
 		return
@@ -109,7 +109,7 @@ func (s *Server) handleControl(w http.ResponseWriter, r *http.Request, identity 
 	welcome := controlproto.Welcome{
 		ControlVersion: controlproto.Version, Type: "welcome", SessionID: sessionID, ServerTime: now,
 		HeartbeatSeconds: int(controlproto.HeartbeatInterval / time.Second), OfflineSeconds: int(controlproto.OfflineTimeout / time.Second),
-		MaxMessageBytes: controlproto.MaxMessageBytes,
+		MaxMessageBytes: controlproto.MaxMessageBytes, PanelVersion: s.PanelVersion, AgentVersion: hello.AgentVersion, BootID: hello.BootID,
 	}
 	welcomeBody, _ := json.Marshal(welcome)
 	if err := connection.Write(sessionContext, websocket.MessageText, welcomeBody); err != nil {

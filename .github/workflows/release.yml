@@ -11,8 +11,6 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      NET_PROBE_RELEASE_SIGNING_KEY_B64: ${{ secrets.NET_PROBE_RELEASE_SIGNING_KEY_B64 }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -24,6 +22,8 @@ jobs:
       - name: Verify frontend
         run: cd web && npm ci && npm run verify
       - name: Derive release verification key
+        env:
+          NET_PROBE_RELEASE_SIGNING_KEY_B64: ${{ secrets.NET_PROBE_RELEASE_SIGNING_KEY_B64 }}
         run: echo "RELEASE_PUBLIC_KEY_HEX=$(go run ./cmd/net-probe-release -print-public-key)" >> "$GITHUB_ENV"
       - name: Build agent linux amd64
         run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME} -X main.releasePublicKeyHex=${RELEASE_PUBLIC_KEY_HEX}" -o net-probe_linux_amd64 ./cmd/net-probe
@@ -34,6 +34,8 @@ jobs:
       - name: Build panel linux arm64
         run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME} -X main.releasePublicKeyHex=${RELEASE_PUBLIC_KEY_HEX}" -o net-probe-panel_linux_arm64 ./cmd/net-probe-panel
       - name: Sign agent manifests
+        env:
+          NET_PROBE_RELEASE_SIGNING_KEY_B64: ${{ secrets.NET_PROBE_RELEASE_SIGNING_KEY_B64 }}
         run: |
           go run ./cmd/net-probe-release -artifact net-probe_linux_amd64 -version "$GITHUB_REF_NAME" -os linux -arch amd64 -url "https://github.com/s2005lg/net-probe/releases/download/${GITHUB_REF_NAME}/net-probe_linux_amd64" -minimum-panel "$GITHUB_REF_NAME" -manifest net-probe_linux_amd64.manifest.json -signature net-probe_linux_amd64.manifest.sig
           go run ./cmd/net-probe-release -artifact net-probe_linux_arm64 -version "$GITHUB_REF_NAME" -os linux -arch arm64 -url "https://github.com/s2005lg/net-probe/releases/download/${GITHUB_REF_NAME}/net-probe_linux_arm64" -minimum-panel "$GITHUB_REF_NAME" -manifest net-probe_linux_arm64.manifest.json -signature net-probe_linux_arm64.manifest.sig

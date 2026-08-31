@@ -99,6 +99,31 @@ func TestCreateConcurrentSequencesAreUniqueAndContiguous(t *testing.T) {
 	}
 }
 
+func TestCreateBatchRollsBackEveryCommandWhenOneInsertFails(t *testing.T) {
+	store, _, db := openCommandStore(t)
+	if _, err := db.Exec(`CREATE TRIGGER reject_second_batch_agent BEFORE INSERT ON agent_commands
+		WHEN NEW.agent_id='123e4567-e89b-42d3-a456-426614174099'
+		BEGIN SELECT RAISE(ABORT,'reject test Agent'); END`); err != nil {
+		t.Fatal(err)
+	}
+	_, err := store.CreateBatch(context.Background(), auth.Actor{UserID: 1, Role: auth.Admin}, []string{
+		storeAgentID, "123e4567-e89b-42d3-a456-426614174099",
+	}, controlproto.Upgrade, []byte(`{"panel_version":"v1.2.3"}`))
+	if err == nil {
+		t.Fatal("batch unexpectedly succeeded")
+	}
+	var commands, events int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM agent_commands`).Scan(&commands); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT COUNT(*) FROM agent_command_events`).Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if commands != 0 || events != 0 {
+		t.Fatalf("partial batch persisted commands=%d events=%d", commands, events)
+	}
+}
+
 func TestCreatePersistsQueuedCommandAndAppendOnlyEvent(t *testing.T) {
 	store, _, d := openCommandStore(t)
 	command := createCommand(t, store, controlproto.ReloadConfig, `{}`)
@@ -227,7 +252,7 @@ func TestQueuedForResendsRunningCommandAfterAgentReconnect(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	queued, err := store.QueuedFor(context.Background(), storeAgentID, time.Unix(command.IssuedAt+1, 0))
+	queued, err := store.QueuedFor(context.Background(), storeAgentID, time.Unix(command.ExpiresAt+1, 0))
 	if err != nil {
 		t.Fatal(err)
 	}

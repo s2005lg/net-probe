@@ -14,35 +14,41 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/s2005lg/net-probe/internal/controlproto"
 )
 
 const (
-	PendingRequestFile = "pending.json"
-	HelperResultFile   = "result.json"
-	UpgradeProofFile   = "upgrade-ready.json"
+	PendingRequestFile  = "pending.json"
+	ClaimedRequestFile  = "claimed.json"
+	RejectedRequestFile = "rejected.json"
+	HelperResultFile    = "result.json"
+	UpgradeProofFile    = "upgrade-ready.json"
 )
 
 type UpdateRequest struct {
-	ArtifactBasename string   `json:"artifact_basename"`
-	Manifest         Manifest `json:"manifest"`
-	Signature        string   `json:"signature"`
-	PreviousVersion  string   `json:"previous_version"`
-	AgentID          string   `json:"agent_id"`
-	CommandID        string   `json:"command_id"`
+	ArtifactBasename string               `json:"artifact_basename"`
+	Manifest         Manifest             `json:"manifest"`
+	Signature        string               `json:"signature"`
+	PreviousVersion  string               `json:"previous_version"`
+	AgentID          string               `json:"agent_id"`
+	CommandID        string               `json:"command_id"`
+	Command          controlproto.Command `json:"command"`
 }
 
 type RequestValidationOptions struct {
-	UpdatesDir     string
-	PublicKey      ed25519.PublicKey
-	CurrentVersion string
-	PanelVersion   string
-	OS             string
-	Arch           string
-	ControlVersion string
-	AgentID        string
-	ExpectedUID    int
-	ExpectedGID    int
-	Now            time.Time
+	UpdatesDir       string
+	UpdatesDirFile   *os.File
+	PublicKey        ed25519.PublicKey
+	CommandPublicKey ed25519.PublicKey
+	CurrentVersion   string
+	OS               string
+	Arch             string
+	ControlVersion   string
+	AgentID          string
+	ExpectedUID      int
+	ExpectedGID      int
+	Now              time.Time
 }
 
 func ValidateUpdateRequest(body []byte, options RequestValidationOptions) (UpdateRequest, []byte, error) {
@@ -57,16 +63,35 @@ func ValidateUpdateRequest(body []byte, options RequestValidationOptions) (Updat
 		!canonicalUUID(request.AgentID) || !canonicalUUID(request.CommandID) {
 		return UpdateRequest{}, nil, errors.New("update request identity is invalid")
 	}
+	if request.Command.CommandID != request.CommandID || request.Command.AgentID != request.AgentID || request.Command.Action != controlproto.Upgrade ||
+		request.Command.ControlVersion != options.ControlVersion || request.Command.Type != "command" || request.Command.ExpiresAt <= request.Command.IssuedAt ||
+		controlproto.VerifyCommand(options.CommandPublicKey, request.Command) != nil {
+		return UpdateRequest{}, nil, errors.New("update command envelope is invalid")
+	}
+	var commandPayload struct {
+		Manifest     Manifest `json:"manifest"`
+		Signature    string   `json:"signature"`
+		PanelVersion string   `json:"panel_version"`
+	}
+	if err := controlproto.StrictDecodePayload(request.Command.Payload, &commandPayload); err != nil ||
+		commandPayload.Manifest != request.Manifest || commandPayload.Signature != request.Signature || commandPayload.PanelVersion == "" {
+		return UpdateRequest{}, nil, errors.New("update command payload does not match request")
+	}
 	signature, err := base64.StdEncoding.DecodeString(request.Signature)
 	if err != nil || len(signature) != ed25519.SignatureSize || base64.StdEncoding.EncodeToString(signature) != request.Signature {
 		return UpdateRequest{}, nil, ErrSignature
 	}
-	artifact, err := readOwnedArtifact(filepath.Join(options.UpdatesDir, request.ArtifactBasename), options.ExpectedUID, options.ExpectedGID)
+	var artifact []byte
+	if options.UpdatesDirFile != nil {
+		artifact, err = readOwnedArtifactAt(options.UpdatesDirFile, request.ArtifactBasename, options.ExpectedUID, options.ExpectedGID)
+	} else {
+		artifact, err = readOwnedArtifact(filepath.Join(options.UpdatesDir, request.ArtifactBasename), options.ExpectedUID, options.ExpectedGID)
+	}
 	if err != nil {
 		return UpdateRequest{}, nil, err
 	}
 	err = VerifyManifest(options.PublicKey, SignedManifest{Manifest: request.Manifest, Signature: signature}, VerifyOptions{
-		CurrentVersion: options.CurrentVersion, PanelVersion: options.PanelVersion, OS: options.OS, Arch: options.Arch,
+		CurrentVersion: options.CurrentVersion, PanelVersion: commandPayload.PanelVersion, OS: options.OS, Arch: options.Arch,
 		ControlVersion: options.ControlVersion, Artifact: artifact, Now: options.Now,
 	})
 	if err != nil {
@@ -92,18 +117,23 @@ func DecodeUpdateRequest(body []byte) (UpdateRequest, error) {
 }
 
 func readOwnedArtifact(path string, expectedUID, expectedGID int) ([]byte, error) {
-	info, err := os.Lstat(path)
+	directory, err := os.Open(filepath.Dir(path))
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() {
-		return nil, errors.New("update artifact must be a regular file")
+	defer directory.Close()
+	return readOwnedArtifactAt(directory, filepath.Base(path), expectedUID, expectedGID)
+}
+
+func readOwnedArtifactAt(directory *os.File, basename string, expectedUID, expectedGID int) ([]byte, error) {
+	if directory == nil || !safeBasename(basename) {
+		return nil, errors.New("update artifact basename is invalid")
 	}
-	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	fd, err := unix.Openat(int(directory.Fd()), basename, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
-		return nil, errors.New("open update artifact without following links")
+		return nil, errors.New("update artifact must be a regular file opened without following links")
 	}
-	file := os.NewFile(uintptr(fd), filepath.Base(path))
+	file := os.NewFile(uintptr(fd), basename)
 	if file == nil {
 		_ = unix.Close(fd)
 		return nil, errors.New("open update artifact")

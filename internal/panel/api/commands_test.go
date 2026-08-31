@@ -169,7 +169,8 @@ func TestAdminImportsSignedReleaseAndCreatesConfirmedExplicitUpgrade(t *testing.
 	if err := d.QueryRow(`SELECT action,payload FROM agent_commands WHERE agent_id=? ORDER BY sequence DESC LIMIT 1`, agent.identity.AgentID).Scan(&action, &payload); err != nil {
 		t.Fatal(err)
 	}
-	if action != string(controlproto.Upgrade) || !strings.Contains(payload, `"version":"v1.2.4"`) || strings.Contains(payload, "private") {
+	if action != string(controlproto.Upgrade) || !strings.Contains(payload, `"version":"v1.2.4"`) ||
+		!strings.Contains(payload, `"panel_version":"v1.2.3"`) || strings.Contains(payload, "private") {
 		t.Fatalf("action=%q payload=%s", action, payload)
 	}
 	if _, err := d.Exec(`UPDATE sessions SET reauthenticated_at=0 WHERE token=?`, token); err != nil {

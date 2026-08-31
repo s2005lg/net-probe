@@ -127,8 +127,9 @@ func (r *Runtime) buildSnapshot(cfg *config.Config, outbox *Outbox) (*runtimeSna
 		PanelURL: cfg.Panel.URL, Identity: identity, NodeID: NodeID(cfg), Version: r.version,
 		Capabilities: capabilities,
 		OutboxDepth:  reporter.OutboxDepth, LastReportCode: r.LastReportCode,
-		OnWelcome: func() {
+		OnWelcome: func(welcome controlproto.Welcome) {
 			if r.upgrade != nil {
+				r.upgrade.SetPanelVersion(welcome.PanelVersion)
 				r.upgrade.MarkControlReady()
 			}
 		},
@@ -195,10 +196,11 @@ func (r *Runtime) Run(ctx context.Context) error {
 	defer cancelRun()
 	controlContext, cancelControl := context.WithCancel(context.Background())
 	defer cancelControl()
-	if err := NotifyReady(); err != nil {
+	readyNotified, err := NotifyReadyConfirmed()
+	if err != nil {
 		return fmt.Errorf("notify ready: %w", err)
 	}
-	if r.upgrade != nil {
+	if readyNotified && r.upgrade != nil {
 		r.upgrade.MarkSystemReady()
 	}
 	watchdogDone := make(chan struct{})

@@ -18,4 +18,4 @@ ProtectKernelModules=yes
 ProtectControlGroups=yes
 RestrictAddressFamilies=AF_UNIX
 IPAddressDeny=any
-ReadWritePaths=/var/lib/net-probe/updates /opt/net-probe/versions /usr/local/bin /run/net-probe
+ReadWritePaths=/var/lib/net-probe-updates /opt/net-probe/versions /usr/local/bin /run/net-probe

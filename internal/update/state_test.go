@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/s2005lg/net-probe/internal/controlproto"
 )
 
 func validUpdateRequest(t *testing.T, dir string) (UpdateRequest, RequestValidationOptions) {
@@ -41,8 +43,24 @@ func validUpdateRequest(t *testing.T, dir string) (UpdateRequest, RequestValidat
 		ArtifactBasename: basename, Manifest: signed.Manifest, Signature: base64.StdEncoding.EncodeToString(signed.Signature),
 		PreviousVersion: "v1.2.3", AgentID: "123e4567-e89b-42d3-a456-426614174040", CommandID: "123e4567-e89b-42d3-a456-426614174041",
 	}
+	commandPublic, commandPrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commandPayload, _ := json.Marshal(struct {
+		Manifest     Manifest `json:"manifest"`
+		Signature    string   `json:"signature"`
+		PanelVersion string   `json:"panel_version"`
+	}{request.Manifest, request.Signature, "v1.2.3"})
+	request.Command = controlproto.Command{
+		ControlVersion: "1", Type: "command", CommandID: request.CommandID, Sequence: 1, AgentID: request.AgentID,
+		Action: controlproto.Upgrade, IssuedAt: now.Unix(), ExpiresAt: now.Add(time.Hour).Unix(), Payload: commandPayload,
+	}
+	if err := controlproto.SignCommand(commandPrivate, &request.Command); err != nil {
+		t.Fatal(err)
+	}
 	return request, RequestValidationOptions{
-		UpdatesDir: dir, PublicKey: public, CurrentVersion: "v1.2.3", PanelVersion: "v1.2.3",
+		UpdatesDir: dir, PublicKey: public, CommandPublicKey: commandPublic, CurrentVersion: "v1.2.3",
 		OS: runtime.GOOS, Arch: runtime.GOARCH, ControlVersion: "1", AgentID: request.AgentID,
 		ExpectedUID: os.Getuid(), ExpectedGID: os.Getgid(),
 	}
@@ -121,5 +139,53 @@ func TestValidateUpdateRequestRejectsWrongModeOwnerAndChangedArtifact(t *testing
 	}
 	if _, _, err := ValidateUpdateRequest(body, options); err == nil {
 		t.Fatal("accepted changed artifact")
+	}
+}
+
+func TestValidateUpdateRequestRejectsAgentRewrittenPanelVersion(t *testing.T) {
+	dir := t.TempDir()
+	request, options := validUpdateRequest(t, dir)
+	var payload map[string]any
+	if err := json.Unmarshal(request.Command.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	payload["panel_version"] = "v999.0.0"
+	request.Command.Payload, _ = json.Marshal(payload)
+	body, _ := json.Marshal(request)
+	if _, _, err := ValidateUpdateRequest(body, options); err == nil || !strings.Contains(err.Error(), "command envelope") {
+		t.Fatalf("Agent-rewritten Panel version err=%v", err)
+	}
+}
+
+func TestValidateUpdateRequestUsesPinnedUpdateDirectory(t *testing.T) {
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "updates")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	request, options := validUpdateRequest(t, dir)
+	body, _ := json.Marshal(request)
+	directory, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer directory.Close()
+	pinned := filepath.Join(parent, "pinned")
+	if err := os.Rename(dir, pinned); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, request.ArtifactBasename), []byte("attacker replacement"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	options.UpdatesDirFile = directory
+	validated, artifact, err := ValidateUpdateRequest(body, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if validated.CommandID != request.CommandID || string(artifact) != "verified-update-binary" {
+		t.Fatalf("validated=%+v artifact=%q", validated, artifact)
 	}
 }

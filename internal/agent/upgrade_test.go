@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/s2005lg/net-probe/internal/controlproto"
 	npupdate "github.com/s2005lg/net-probe/internal/update"
 )
 
@@ -32,13 +33,19 @@ func signedUpgradePayload(t *testing.T, private ed25519.PrivateKey, artifact []b
 		t.Fatal(err)
 	}
 	payload, err := json.Marshal(struct {
-		Manifest  npupdate.Manifest `json:"manifest"`
-		Signature string            `json:"signature"`
-	}{Manifest: signed.Manifest, Signature: base64.StdEncoding.EncodeToString(signed.Signature)})
+		Manifest     npupdate.Manifest `json:"manifest"`
+		Signature    string            `json:"signature"`
+		PanelVersion string            `json:"panel_version"`
+	}{Manifest: signed.Manifest, Signature: base64.StdEncoding.EncodeToString(signed.Signature), PanelVersion: "v1.2.3"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return payload
+}
+
+func handleUpgrade(manager *UpgradeManager, ctx context.Context, payload json.RawMessage, commandID string) CommandOutcome {
+	command := controlproto.Command{Action: controlproto.Upgrade, CommandID: commandID, Payload: append(json.RawMessage(nil), payload...)}
+	return manager.Handle(context.WithValue(ctx, commandEnvelopeContextKey{}, command), payload, commandID)
 }
 
 func TestUpgradeManagerStagesVerifiedArtifactAndReturnsDurableHelperResult(t *testing.T) {
@@ -54,10 +61,11 @@ func TestUpgradeManagerStagesVerifiedArtifactAndReturnsDurableHelperResult(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
+	manager.SetPanelVersion("v1.2.3")
 	commandID := "123e4567-e89b-42d3-a456-426614174041"
 	payload := signedUpgradePayload(t, private, artifact, server.URL+"/net-probe")
 	stageContext, cancelStage := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	outcome := manager.Handle(stageContext, payload, commandID)
+	outcome := handleUpgrade(manager, stageContext, payload, commandID)
 	cancelStage()
 	if !outcome.Pending || outcome.Failed || outcome.Code != "upgrade_staged" {
 		t.Fatalf("staged outcome=%+v", outcome)
@@ -82,9 +90,10 @@ func TestUpgradeManagerStagesVerifiedArtifactAndReturnsDurableHelperResult(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
+	upgradedManager.SetPanelVersion("v1.2.3")
 	completed := make(chan CommandOutcome, 1)
 	go func() {
-		completed <- upgradedManager.Handle(context.Background(), payload, commandID)
+		completed <- handleUpgrade(upgradedManager, context.Background(), payload, commandID)
 	}()
 	time.Sleep(30 * time.Millisecond)
 	resultBody, _ := json.Marshal(npupdate.HelperResult{
@@ -117,8 +126,48 @@ func TestUpgradeManagerRejectsInsecureRedirect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	outcome := manager.Handle(context.Background(), signedUpgradePayload(t, private, artifact, server.URL+"/net-probe"), "123e4567-e89b-42d3-a456-426614174041")
+	manager.SetPanelVersion("v1.2.3")
+	outcome := handleUpgrade(manager, context.Background(), signedUpgradePayload(t, private, artifact, server.URL+"/net-probe"), "123e4567-e89b-42d3-a456-426614174041")
 	if !outcome.Failed || outcome.Pending || outcome.Code != "download_failed" {
+		t.Fatalf("outcome=%+v", outcome)
+	}
+}
+
+func TestUpgradeManagerDoesNotChmodRootManagedDirectory(t *testing.T) {
+	public, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("NET_PROBE_UPDATE_DIRECTORY", dir)
+	if _, err := NewUpgradeManager(t.TempDir(), &Identity{AgentID: executorAgentID, ReleaseKey: public}, "v1.2.3", nil); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o770 {
+		t.Fatalf("root-managed directory mode changed to %o", info.Mode().Perm())
+	}
+}
+
+func TestUpgradeManagerRejectsPanelVersionNotBoundToWelcome(t *testing.T) {
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewUpgradeManager(t.TempDir(), &Identity{AgentID: executorAgentID, ReleaseKey: public}, "v1.2.3", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.SetPanelVersion("v1.2.2")
+	outcome := handleUpgrade(manager, context.Background(), signedUpgradePayload(t, private, []byte("artifact"), "https://releases.example.test/net-probe"),
+		"123e4567-e89b-42d3-a456-426614174041")
+	if !outcome.Failed || outcome.Code != "panel_version_mismatch" {
 		t.Fatalf("outcome=%+v", outcome)
 	}
 }
@@ -138,9 +187,10 @@ func TestUpgradeReadinessProofRequiresSystemControlAndPanelReport(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	oldManager.SetPanelVersion("v1.2.3")
 	commandID := "123e4567-e89b-42d3-a456-426614174041"
 	stageContext, cancelStage := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	if outcome := oldManager.Handle(stageContext, signedUpgradePayload(t, private, artifact, server.URL+"/net-probe"), commandID); !outcome.Pending {
+	if outcome := handleUpgrade(oldManager, stageContext, signedUpgradePayload(t, private, artifact, server.URL+"/net-probe"), commandID); !outcome.Pending {
 		t.Fatalf("staging=%+v", outcome)
 	}
 	cancelStage()
@@ -148,6 +198,7 @@ func TestUpgradeReadinessProofRequiresSystemControlAndPanelReport(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	manager.SetPanelVersion("v1.2.3")
 	manager.MarkSystemReady()
 	manager.MarkControlReady()
 	proofPath := filepath.Join(runtimeDir, npupdate.UpgradeProofFile)

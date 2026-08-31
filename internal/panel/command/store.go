@@ -56,19 +56,42 @@ func NewStore(db *sql.DB, signer ed25519.PrivateKey) (*Store, error) {
 }
 
 func (s *Store) Create(ctx context.Context, actor auth.Actor, agentID string, action controlproto.Action, payload []byte) (controlproto.Command, error) {
-	if actor.UserID <= 0 || agentID == "" {
-		return controlproto.Command{}, errors.New("command actor and Agent ID are required")
+	commands, err := s.CreateBatch(ctx, actor, []string{agentID}, action, payload)
+	if err != nil {
+		return controlproto.Command{}, err
+	}
+	return commands[0], nil
+}
+
+// CreateBatch commits every signed command and its initial audit event in one
+// transaction. Callers can therefore safely report either the complete fleet
+// operation or no operation at all.
+func (s *Store) CreateBatch(ctx context.Context, actor auth.Actor, agentIDs []string, action controlproto.Action, payload []byte) ([]controlproto.Command, error) {
+	if actor.UserID <= 0 || len(agentIDs) == 0 || len(agentIDs) > 100 {
+		return nil, errors.New("command actor and Agent IDs are required")
 	}
 	ttl := controlproto.TTL(action)
 	if ttl <= 0 {
-		return controlproto.Command{}, errors.New("unsupported command action")
+		return nil, errors.New("unsupported command action")
 	}
 	if len(payload) == 0 || len(payload) > controlproto.MaxMessageBytes || !json.Valid(payload) {
-		return controlproto.Command{}, errors.New("command payload must be bounded valid JSON")
+		return nil, errors.New("command payload must be bounded valid JSON")
 	}
-	commandID, err := commandUUID()
-	if err != nil {
-		return controlproto.Command{}, err
+	seen := make(map[string]struct{}, len(agentIDs))
+	commandIDs := make([]string, len(agentIDs))
+	for index, agentID := range agentIDs {
+		if agentID == "" {
+			return nil, errors.New("command Agent ID is required")
+		}
+		if _, duplicate := seen[agentID]; duplicate {
+			return nil, errors.New("duplicate command Agent ID")
+		}
+		seen[agentID] = struct{}{}
+		commandID, err := commandUUID()
+		if err != nil {
+			return nil, err
+		}
+		commandIDs[index] = commandID
 	}
 	now := s.now().UTC().Truncate(time.Second)
 
@@ -79,34 +102,38 @@ func (s *Store) Create(ctx context.Context, actor auth.Actor, agentID string, ac
 	defer s.mu.Unlock()
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
-		return controlproto.Command{}, err
+		return nil, err
 	}
 	defer tx.Rollback()
-	var sequence uint64
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence),0)+1 FROM agent_commands WHERE agent_id=?`, agentID).Scan(&sequence); err != nil {
-		return controlproto.Command{}, err
-	}
-	command := controlproto.Command{
-		ControlVersion: controlproto.Version, Type: "command", CommandID: commandID, Sequence: sequence,
-		AgentID: agentID, Action: action, IssuedAt: now.Unix(), ExpiresAt: now.Add(ttl).Unix(),
-		Payload: append(json.RawMessage(nil), payload...),
-	}
-	if err := controlproto.SignCommand(s.signer, &command); err != nil {
-		return controlproto.Command{}, err
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_commands(command_id,agent_id,sequence,control_version,message_type,action,payload,signature,state,issued_at,expires_at,created_by_user_id,created_session_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		command.CommandID, command.AgentID, command.Sequence, command.ControlVersion, command.Type, command.Action, string(command.Payload), command.Signature,
-		Queued, command.IssuedAt, command.ExpiresAt, actor.UserID, actor.SessionID); err != nil {
-		return controlproto.Command{}, err
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO agent_command_events(command_id,actor_id,session_id,from_state,to_state,created_at,reason_code) VALUES(?,?,?,?,?,?,?)`,
-		command.CommandID, actor.UserID, actor.SessionID, "", Queued, now.Unix(), "created"); err != nil {
-		return controlproto.Command{}, err
+	commands := make([]controlproto.Command, 0, len(agentIDs))
+	for index, agentID := range agentIDs {
+		var sequence uint64
+		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(sequence),0)+1 FROM agent_commands WHERE agent_id=?`, agentID).Scan(&sequence); err != nil {
+			return nil, err
+		}
+		command := controlproto.Command{
+			ControlVersion: controlproto.Version, Type: "command", CommandID: commandIDs[index], Sequence: sequence,
+			AgentID: agentID, Action: action, IssuedAt: now.Unix(), ExpiresAt: now.Add(ttl).Unix(),
+			Payload: append(json.RawMessage(nil), payload...),
+		}
+		if err := controlproto.SignCommand(s.signer, &command); err != nil {
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO agent_commands(command_id,agent_id,sequence,control_version,message_type,action,payload,signature,state,issued_at,expires_at,created_by_user_id,created_session_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			command.CommandID, command.AgentID, command.Sequence, command.ControlVersion, command.Type, command.Action, string(command.Payload), command.Signature,
+			Queued, command.IssuedAt, command.ExpiresAt, actor.UserID, actor.SessionID); err != nil {
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO agent_command_events(command_id,actor_id,session_id,from_state,to_state,created_at,reason_code) VALUES(?,?,?,?,?,?,?)`,
+			command.CommandID, actor.UserID, actor.SessionID, "", Queued, now.Unix(), "created"); err != nil {
+			return nil, err
+		}
+		commands = append(commands, command)
 	}
 	if err := tx.Commit(); err != nil {
-		return controlproto.Command{}, err
+		return nil, err
 	}
-	return command, nil
+	return commands, nil
 }
 
 func (s *Store) Transition(ctx context.Context, commandID string, to State, actor auth.Actor, reasonCode, resultCode string, resultJSON []byte) error {
@@ -179,7 +206,7 @@ func allowedTransition(from, to State) bool {
 
 func (s *Store) QueuedFor(ctx context.Context, agentID string, now time.Time) ([]controlproto.Command, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT control_version,message_type,command_id,sequence,agent_id,action,issued_at,expires_at,payload,signature
-		FROM agent_commands WHERE agent_id=? AND state IN ('queued','dispatched','accepted','running') AND expires_at>? ORDER BY sequence`, agentID, now.Unix())
+		FROM agent_commands WHERE agent_id=? AND ((state IN ('queued','dispatched') AND expires_at>?) OR state IN ('accepted','running')) ORDER BY sequence`, agentID, now.Unix())
 	if err != nil {
 		return nil, err
 	}
@@ -226,7 +253,7 @@ func (s *Store) History(ctx context.Context, agentID string, limit int) ([]Histo
 }
 
 func (s *Store) Expire(ctx context.Context, now time.Time) (int, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT command_id FROM agent_commands WHERE state IN ('queued','dispatched','accepted') AND expires_at<=? ORDER BY agent_id,sequence`, now.Unix())
+	rows, err := s.db.QueryContext(ctx, `SELECT command_id FROM agent_commands WHERE state IN ('queued','dispatched') AND expires_at<=? ORDER BY agent_id,sequence`, now.Unix())
 	if err != nil {
 		return 0, err
 	}

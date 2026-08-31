@@ -20,6 +20,19 @@ else
   base="https://github.com/s2005lg/net-probe/releases/download/${version}"
 fi
 
+panel_url="${NET_PROBE_PANEL_PUBLIC_URL:-}"
+python3 - "$panel_url" <<'PY'
+import sys, urllib.parse
+url = urllib.parse.urlsplit(sys.argv[1])
+if url.scheme != "https" or not url.hostname or url.username or url.password or url.path not in ("", "/") or url.query or url.fragment:
+    raise SystemExit("NET_PROBE_PANEL_PUBLIC_URL must be the externally reachable HTTPS origin")
+PY
+panel_url_toml="$(python3 - "$panel_url" <<'PY'
+import json, sys
+print(json.dumps(sys.argv[1]))
+PY
+)"
+
 if [ -n "${NET_PROBE_PANEL_PORT:-}" ]; then
   port="${NET_PROBE_PANEL_PORT}"
 else
@@ -41,16 +54,13 @@ install -d -m 0755 /etc/net-probe-panel
 install -d -m 0755 /var/lib/net-probe-panel
 chown net-probe-panel:net-probe-panel /var/lib/net-probe-panel
 
-agent_token="${NET_PROBE_PANEL_AGENT_TOKEN:-$(openssl rand -hex 24)}"
 admin_password="${NET_PROBE_PANEL_ADMIN_PASSWORD:-$(openssl rand -hex 24)}"
 
 cat > /etc/net-probe-panel/config.toml <<EOF
 listen_addr = ":${port}"
 data_dir = "/var/lib/net-probe-panel"
+public_url = ${panel_url_toml}
 node_timeout = "3m"
-
-[agent]
-token = "${agent_token}"
 
 [admin]
 user = "admin"
@@ -77,9 +87,13 @@ User=net-probe-panel
 EnvironmentFile=-/etc/net-probe-panel/panel.env
 ExecStart=/usr/local/bin/net-probe-panel --config /etc/net-probe-panel/config.toml
 Restart=on-failure
+RestartSec=5s
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/net-probe-panel /etc/net-probe-panel
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ReadWritePaths=/var/lib/net-probe-panel
 
 [Install]
 WantedBy=multi-user.target
@@ -88,41 +102,27 @@ EOF
 systemctl daemon-reload
 systemctl enable --now net-probe-panel.service
 
-# Resolve a public URL for the agent install one-liner.
-panel_url="${NET_PROBE_PANEL_PUBLIC_URL:-}"
-addr_note=""
-if [ -z "$panel_url" ]; then
-  panel_ip=""
-  if command -v curl >/dev/null 2>&1; then
-    panel_ip="$(curl -fsSL -m 5 https://api.ipify.org 2>/dev/null || curl -fsSL -m 5 https://ifconfig.me 2>/dev/null || true)"
+ca_path="$(mktemp /tmp/net-probe-panel-ca.XXXXXX)"
+trap 'rm -f "$ca_path"' EXIT
+for _attempt in $(seq 1 30); do
+  if curl -kfsS --connect-timeout 2 "https://127.0.0.1:${port}/api/v1/ca" -o "$ca_path"; then
+    break
   fi
-  if [ -z "$panel_ip" ]; then
-    panel_ip="$(hostname -I 2>/dev/null | tr ' ' '\n' | awk '/^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ {print; exit}' || true)"
-  fi
-  if [ -n "$panel_ip" ]; then
-    panel_url="https://${panel_ip}:${port}"
-    case "$panel_ip" in
-      10.*|127.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[0-1].*|::1|fe80:*|fc*|fd*)
-        addr_note="note: detected address may be private/NAT-local; replace it with the panel's public IP or domain."
-        ;;
-    esac
-  else
-    panel_url="https://<panel-ip>:${port}"
-    addr_note="note: could not detect the panel address; replace <panel-ip> with the panel's public IP or domain."
-  fi
-fi
+  sleep 1
+done
+[ -s "$ca_path" ] || { echo "Panel CA endpoint did not become ready" >&2; exit 1; }
+ca_fingerprint="$(openssl x509 -in "$ca_path" -outform DER | sha256sum | awk '{print $1}')"
 
 echo "installed net-probe-panel ${version} for ${arch}"
 echo "config: /etc/net-probe-panel/config.toml"
 echo "listen port: ${port}"
-echo "agent token: ${agent_token}"
 echo "admin password: ${admin_password}"
+echo "Panel URL: ${panel_url}"
+echo "Panel CA fingerprint: ${ca_fingerprint}"
 echo
-echo "===== agent install command (copy to each agent node) ====="
-echo "curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install.sh | \\"
-echo "  sudo NET_PROBE_PANEL_URL=\"${panel_url}\" \\"
-echo "       NET_PROBE_PANEL_TOKEN=\"${agent_token}\" bash"
-echo "==========================================================="
-if [ -n "$addr_note" ]; then
-  echo "$addr_note"
-fi
+echo "Sign in as admin, create a one-use Agent enrollment code, then run install.sh on that Agent with:"
+echo "  NET_PROBE_PANEL_URL=\"${panel_url}\""
+echo "  NET_PROBE_VERSION=<explicit-signed-release>"
+echo "  NET_PROBE_CA_FINGERPRINT=\"${ca_fingerprint}\""
+echo "  NET_PROBE_ENROLLMENT_CODE=<one-use-code>"
+echo "  NET_PROBE_RELEASE_PUBLIC_KEY_HEX=<trusted-release-public-key>"

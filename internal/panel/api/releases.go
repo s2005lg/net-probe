@@ -18,6 +18,12 @@ type releaseInput struct {
 	Signature string            `json:"signature"`
 }
 
+type upgradeReleaseInput struct {
+	Manifest     npupdate.Manifest `json:"manifest"`
+	Signature    string            `json:"signature"`
+	PanelVersion string            `json:"panel_version"`
+}
+
 func (s *Server) handleImportRelease(w http.ResponseWriter, r *http.Request) {
 	actor, ok := auth.ActorFromContext(r.Context())
 	if !ok || s.releaseKey == nil {
@@ -148,19 +154,16 @@ func (s *Server) handleCreateUpgrades(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	payload, _ := json.Marshal(releaseInput{Manifest: manifest, Signature: signatureText})
-	commands := make([]controlproto.Command, 0, len(input.AgentIDs))
+	payload, _ := json.Marshal(upgradeReleaseInput{Manifest: manifest, Signature: signatureText, PanelVersion: s.PanelVersion})
+	commands, err := s.commandStore.CreateBatch(r.Context(), actor, input.AgentIDs, controlproto.Upgrade, payload)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "command_create_failed"}})
+		return
+	}
 	for _, agentID := range input.AgentIDs {
-		command, err := s.commandStore.Create(r.Context(), actor, agentID, controlproto.Upgrade, payload)
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "command_create_failed"}})
-			return
-		}
-		commands = append(commands, command)
-		if err := s.commandDispatcher.DispatchAgent(r.Context(), agentID); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "command_dispatch_failed"}})
-			return
-		}
+		// Dispatch is best effort after the atomic commit. Queued commands remain
+		// durable and are sent on the Agent's next control-channel reconnect.
+		_ = s.commandDispatcher.DispatchAgent(r.Context(), agentID)
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"commands": commands})
 }

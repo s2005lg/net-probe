@@ -31,6 +31,13 @@ type CommandOutcome struct {
 
 type CommandHandler func(context.Context, json.RawMessage, string) CommandOutcome
 
+type commandEnvelopeContextKey struct{}
+
+func commandEnvelopeFromContext(ctx context.Context) (controlproto.Command, bool) {
+	command, ok := ctx.Value(commandEnvelopeContextKey{}).(controlproto.Command)
+	return command, ok
+}
+
 type commandRecord struct {
 	CommandID string                     `json:"command_id"`
 	Sequence  uint64                     `json:"sequence"`
@@ -99,13 +106,6 @@ func (e *CommandExecutor) Execute(ctx context.Context, command controlproto.Comm
 	if command.AgentID != e.agentID {
 		return result("wrong_agent")
 	}
-	now := e.now()
-	if command.IssuedAt > now.Add(time.Minute).Unix() {
-		return result("issued_in_future")
-	}
-	if command.ExpiresAt <= now.Unix() || command.ExpiresAt <= command.IssuedAt {
-		return result("expired")
-	}
 	e.executeMu.Lock()
 	defer e.executeMu.Unlock()
 	e.mu.Lock()
@@ -125,6 +125,15 @@ func (e *CommandExecutor) Execute(ctx context.Context, command controlproto.Comm
 			return prior
 		}
 		return e.resumeLocked(ctx, command, index)
+	}
+	now := e.now()
+	if command.IssuedAt > now.Add(time.Minute).Unix() {
+		e.mu.Unlock()
+		return result("issued_in_future")
+	}
+	if command.ExpiresAt <= now.Unix() || command.ExpiresAt <= command.IssuedAt {
+		e.mu.Unlock()
+		return result("expired")
 	}
 	if command.Sequence <= e.state.HighestSeen {
 		e.mu.Unlock()
@@ -174,7 +183,7 @@ func (e *CommandExecutor) resumeLocked(ctx context.Context, command controlproto
 	}
 	e.currentID.Store(command.CommandID)
 	e.mu.Unlock()
-	outcome := callCommandHandler(ctx, handler, command.Payload, command.CommandID)
+	outcome := callCommandHandler(ctx, handler, command)
 	e.currentID.Store("")
 	if outcome.Pending && outcome.Failed {
 		outcome = CommandOutcome{Code: "invalid_handler_result", Data: json.RawMessage(`{}`), Failed: true}
@@ -222,13 +231,14 @@ func (e *CommandExecutor) resumeLocked(ctx context.Context, command controlproto
 	return result
 }
 
-func callCommandHandler(ctx context.Context, handler CommandHandler, payload json.RawMessage, commandID string) (outcome CommandOutcome) {
+func callCommandHandler(ctx context.Context, handler CommandHandler, command controlproto.Command) (outcome CommandOutcome) {
 	defer func() {
 		if recover() != nil {
 			outcome = CommandOutcome{Code: "handler_failed", Data: json.RawMessage(`{}`), Failed: true}
 		}
 	}()
-	return handler(ctx, append(json.RawMessage(nil), payload...), commandID)
+	command.Payload = append(json.RawMessage(nil), command.Payload...)
+	return handler(context.WithValue(ctx, commandEnvelopeContextKey{}, command), command.Payload, command.CommandID)
 }
 
 func (e *CommandExecutor) HighestCompleted() uint64 {

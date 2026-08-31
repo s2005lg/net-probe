@@ -31,7 +31,7 @@ type ControlOptions struct {
 	LastReportCode   func() string
 	CurrentCommandID func() string
 	HandleCommand    func(context.Context, controlproto.Command) controlproto.CommandResult
-	OnWelcome        func()
+	OnWelcome        func(controlproto.Welcome)
 }
 
 type ControlClient struct {
@@ -138,11 +138,11 @@ func (c *ControlClient) runSession(ctx context.Context) error {
 		return permanentControlError{err: errors.New("control welcome missing")}
 	}
 	var welcome controlproto.Welcome
-	if err := controlproto.StrictDecode(body, &welcome); err != nil || !validWelcome(welcome) {
+	if err := controlproto.StrictDecode(body, &welcome); err != nil || !validWelcome(welcome, hello) {
 		return permanentControlError{err: errors.New("control welcome invalid")}
 	}
 	if c.options.OnWelcome != nil {
-		c.options.OnWelcome()
+		c.options.OnWelcome(welcome)
 	}
 	heartbeatInterval := time.Duration(welcome.HeartbeatSeconds) * time.Second
 	if c.heartbeatOverride > 0 {
@@ -282,9 +282,10 @@ func (c *ControlClient) heartbeat() controlproto.Heartbeat {
 	return heartbeat
 }
 
-func validWelcome(welcome controlproto.Welcome) bool {
+func validWelcome(welcome controlproto.Welcome, hello controlproto.Hello) bool {
 	return welcome.SessionID != "" && welcome.HeartbeatSeconds > 0 && welcome.OfflineSeconds >= welcome.HeartbeatSeconds &&
-		welcome.MaxMessageBytes > 0 && welcome.MaxMessageBytes <= controlproto.MaxMessageBytes
+		welcome.MaxMessageBytes > 0 && welcome.MaxMessageBytes <= controlproto.MaxMessageBytes &&
+		welcome.PanelVersion != "" && len(welcome.PanelVersion) <= 128 && welcome.AgentVersion == hello.AgentVersion && welcome.BootID == hello.BootID
 }
 
 func readBootID() (string, error) {
