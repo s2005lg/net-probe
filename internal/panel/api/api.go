@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/s2005lg/net-probe/internal/panel/auth"
+	panelcommand "github.com/s2005lg/net-probe/internal/panel/command"
 	"github.com/s2005lg/net-probe/internal/panel/config"
 	panelcontrol "github.com/s2005lg/net-probe/internal/panel/control"
 	"github.com/s2005lg/net-probe/internal/panel/pki"
@@ -19,13 +20,15 @@ type NodeGeoObserver interface {
 }
 
 type Server struct {
-	db          *sql.DB
-	cfg         *config.Config
-	geoObserver NodeGeoObserver
-	pkiManager  *pki.Manager
-	releaseKey  ReleasePublicKeyProvider
-	controlHub  *panelcontrol.Hub
-	ConfigPath  string
+	db                *sql.DB
+	cfg               *config.Config
+	geoObserver       NodeGeoObserver
+	pkiManager        *pki.Manager
+	releaseKey        ReleasePublicKeyProvider
+	controlHub        *panelcontrol.Hub
+	commandStore      *panelcommand.Store
+	commandDispatcher *panelcommand.Dispatcher
+	ConfigPath        string
 }
 
 func New(d *sql.DB, cfg *config.Config, observers ...NodeGeoObserver) *Server {
@@ -46,6 +49,8 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("POST /api/v1/agents/renew", s.requireAgent(s.handleRenew))
 	mux.Handle("POST /api/v1/agents/report", s.requireAgent(s.handleReport))
 	mux.Handle("GET /api/v1/agents/control", s.requireAgent(s.handleControl))
+	mux.Handle("GET /api/v1/admin/agents/{id}/commands", s.requireRole(auth.Viewer, s.handleCommandHistory))
+	mux.Handle("POST /api/v1/admin/agents/{id}/commands", s.requireRole(auth.Operator, s.handleCreateCommand))
 	mux.Handle("POST /api/v1/admin/enrollments", s.requireRole(auth.Admin, s.handleCreateEnrollment))
 	mux.Handle("POST /api/v1/admin/agents/{id}/revoke", s.requireRole(auth.Admin, s.handleRevokeAgent))
 	mux.HandleFunc("POST /api/v1/admin/login", s.handleLogin)

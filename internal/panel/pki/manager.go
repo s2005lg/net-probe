@@ -151,6 +151,25 @@ func (m *Manager) CAFingerprint() string {
 	return m.caFingerprint
 }
 
+func (m *Manager) CommandSigningKey() (ed25519.PrivateKey, error) {
+	if m == nil {
+		return nil, errors.New("PKI manager is required")
+	}
+	privateDER, err := readPEM(m.CommandKeyFile, "PRIVATE KEY")
+	if err != nil {
+		return nil, err
+	}
+	privateAny, err := x509.ParsePKCS8PrivateKey(privateDER)
+	if err != nil {
+		return nil, fmt.Errorf("parse command private key: %w", err)
+	}
+	privateKey, ok := privateAny.(ed25519.PrivateKey)
+	if !ok || len(privateKey) != ed25519.PrivateKeySize {
+		return nil, errors.New("command private key is not Ed25519")
+	}
+	return ed25519.PrivateKey(bytes.Clone(privateKey)), nil
+}
+
 // IssueAgent signs a CSR public key with a fresh 90-day Agent certificate.
 // CSR subject and SAN fields are deliberately ignored.
 func (m *Manager) IssueAgent(agentID, nodeID string, csrDER []byte, now time.Time) ([]byte, string, error) {

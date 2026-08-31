@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/s2005lg/net-probe/internal/panel/auth"
+	panelcommand "github.com/s2005lg/net-probe/internal/panel/command"
 	"github.com/s2005lg/net-probe/internal/panel/pki"
 )
 
@@ -45,9 +46,23 @@ func (k StaticReleasePublicKey) ReleasePublicKey() (ed25519.PublicKey, error) {
 // ConfigureAgentPKI enables enrollment and certificate issuance. Keeping the
 // release key behind an interface avoids coupling this task to Task 9's build
 // injection and release-signing workflow.
-func (s *Server) ConfigureAgentPKI(manager *pki.Manager, releaseKey ReleasePublicKeyProvider) {
+func (s *Server) ConfigureAgentPKI(manager *pki.Manager, releaseKey ReleasePublicKeyProvider) error {
+	if manager == nil {
+		return errors.New("PKI manager is required")
+	}
+	signer, err := manager.CommandSigningKey()
+	if err != nil {
+		return err
+	}
+	store, err := panelcommand.NewStore(s.db, signer)
+	if err != nil {
+		return err
+	}
 	s.pkiManager = manager
 	s.releaseKey = releaseKey
+	s.commandStore = store
+	s.commandDispatcher = panelcommand.NewDispatcher(store, s.controlHub)
+	return nil
 }
 
 type EnrollmentResponse struct {

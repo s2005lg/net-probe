@@ -83,7 +83,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("configure private PKI: %v", err)
 	}
-	apiServer.ConfigureAgentPKI(manager, api.StaticReleasePublicKey(decodeReleasePublicKey()))
+	if err := apiServer.ConfigureAgentPKI(manager, api.StaticReleasePublicKey(decodeReleasePublicKey())); err != nil {
+		log.Fatalf("configure Agent control plane: %v", err)
+	}
 	log.Printf("net-probe-panel listening on %s", cfg.ListenAddr)
 	if err := srv.ListenAndServeTLS(manager.ServerCertFile, manager.ServerKeyFile); err != nil {
 		log.Fatalf("serve: %v", err)

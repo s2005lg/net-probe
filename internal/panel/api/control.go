@@ -119,6 +119,13 @@ func (s *Server) handleControl(w http.ResponseWriter, r *http.Request, identity 
 
 	writerDone := make(chan error, 1)
 	go session.writeLoop(sessionContext, writerDone)
+	if s.commandDispatcher != nil {
+		if err := s.commandDispatcher.DispatchAgent(sessionContext, identity.AgentID); err != nil {
+			disconnectReason = "dispatch_failed"
+			_ = connection.Close(websocket.StatusInternalError, disconnectReason)
+			return
+		}
+	}
 	windowStarted := time.Now()
 	messages := 0
 	for {
@@ -147,22 +154,49 @@ func (s *Server) handleControl(w http.ResponseWriter, r *http.Request, identity 
 			_ = connection.Close(websocket.StatusPolicyViolation, disconnectReason)
 			return
 		}
-		var heartbeat controlproto.Heartbeat
-		if err := controlproto.StrictDecode(body, &heartbeat); err != nil || !validHeartbeat(heartbeat) {
-			disconnectReason = "invalid_heartbeat"
+		var header struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(body, &header); err != nil {
+			disconnectReason = "invalid_message"
 			_ = connection.Close(websocket.StatusPolicyViolation, disconnectReason)
 			return
 		}
-		now = time.Now().Unix()
-		result, err := s.db.Exec(`UPDATE agent_identities SET last_heartbeat_at=?,agent_version=?,updated_at=? WHERE agent_id=? AND cert_serial=? AND revoked_at=0`,
-			now, heartbeat.AgentVersion, now, identity.AgentID, identity.Serial)
-		if err != nil {
-			disconnectReason = "db_error"
-			_ = connection.Close(websocket.StatusInternalError, disconnectReason)
-			return
-		}
-		if updated, err := result.RowsAffected(); err != nil || updated != 1 {
-			disconnectReason = "revoked"
+		switch header.Type {
+		case "heartbeat":
+			var heartbeat controlproto.Heartbeat
+			if err := controlproto.StrictDecode(body, &heartbeat); err != nil || !validHeartbeat(heartbeat) {
+				disconnectReason = "invalid_heartbeat"
+				_ = connection.Close(websocket.StatusPolicyViolation, disconnectReason)
+				return
+			}
+			now = time.Now().Unix()
+			result, err := s.db.Exec(`UPDATE agent_identities SET last_heartbeat_at=?,agent_version=?,updated_at=? WHERE agent_id=? AND cert_serial=? AND revoked_at=0`,
+				now, heartbeat.AgentVersion, now, identity.AgentID, identity.Serial)
+			if err != nil {
+				disconnectReason = "db_error"
+				_ = connection.Close(websocket.StatusInternalError, disconnectReason)
+				return
+			}
+			if updated, err := result.RowsAffected(); err != nil || updated != 1 {
+				disconnectReason = "revoked"
+				_ = connection.Close(websocket.StatusPolicyViolation, disconnectReason)
+				return
+			}
+		case "command_result":
+			if s.commandStore == nil {
+				disconnectReason = "command_store_unavailable"
+				_ = connection.Close(websocket.StatusInternalError, disconnectReason)
+				return
+			}
+			var result controlproto.CommandResult
+			if err := controlproto.StrictDecode(body, &result); err != nil || s.commandStore.ApplyAgentResult(sessionContext, identity.AgentID, result) != nil {
+				disconnectReason = "invalid_command_result"
+				_ = connection.Close(websocket.StatusPolicyViolation, disconnectReason)
+				return
+			}
+		default:
+			disconnectReason = "invalid_message"
 			_ = connection.Close(websocket.StatusPolicyViolation, disconnectReason)
 			return
 		}
