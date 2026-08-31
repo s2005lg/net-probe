@@ -31,6 +31,7 @@ type ControlOptions struct {
 	LastReportCode   func() string
 	CurrentCommandID func() string
 	HandleCommand    func(context.Context, controlproto.Command) controlproto.CommandResult
+	OnWelcome        func()
 }
 
 type ControlClient struct {
@@ -139,6 +140,9 @@ func (c *ControlClient) runSession(ctx context.Context) error {
 	var welcome controlproto.Welcome
 	if err := controlproto.StrictDecode(body, &welcome); err != nil || !validWelcome(welcome) {
 		return permanentControlError{err: errors.New("control welcome invalid")}
+	}
+	if c.options.OnWelcome != nil {
+		c.options.OnWelcome()
 	}
 	heartbeatInterval := time.Duration(welcome.HeartbeatSeconds) * time.Second
 	if c.heartbeatOverride > 0 {

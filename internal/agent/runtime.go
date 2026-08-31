@@ -42,6 +42,7 @@ type Runtime struct {
 	logger     *logx.Logger
 	scheduler  *Scheduler
 	executor   *CommandExecutor
+	upgrade    *UpgradeManager
 	collect    collectFunc
 	lastReport atomic.Value
 }
@@ -68,6 +69,11 @@ func NewRuntime(configPath string, cfg *config.Config, version string, runner de
 		return nil, err
 	}
 	runtime.current = snapshot
+	upgrade, err := NewUpgradeManager(StateDir(), snapshot.identity, version, nil)
+	if err != nil {
+		return nil, fmt.Errorf("initialize upgrade manager: %w", err)
+	}
+	runtime.upgrade = upgrade
 	executor, err := OpenCommandExecutor(StateDir(), snapshot.identity.AgentID, snapshot.identity.CommandKey, runtime.commandHandlers())
 	if err != nil {
 		return nil, fmt.Errorf("initialize command executor: %w", err)
@@ -113,10 +119,19 @@ func (r *Runtime) buildSnapshot(cfg *config.Config, outbox *Outbox) (*runtimeSna
 	if err != nil {
 		return nil, err
 	}
+	capabilities := []controlproto.Action{controlproto.CollectNow, controlproto.ReloadConfig, controlproto.SelfCheck}
+	if cfg.Collect.Upgradable {
+		capabilities = append(capabilities, controlproto.Upgrade)
+	}
 	controlClient, err := NewControlClient(ControlOptions{
 		PanelURL: cfg.Panel.URL, Identity: identity, NodeID: NodeID(cfg), Version: r.version,
-		Capabilities: []controlproto.Action{controlproto.CollectNow, controlproto.ReloadConfig, controlproto.SelfCheck},
+		Capabilities: capabilities,
 		OutboxDepth:  reporter.OutboxDepth, LastReportCode: r.LastReportCode,
+		OnWelcome: func() {
+			if r.upgrade != nil {
+				r.upgrade.MarkControlReady()
+			}
+		},
 	})
 	if err != nil {
 		return nil, err
@@ -182,6 +197,9 @@ func (r *Runtime) Run(ctx context.Context) error {
 	defer cancelControl()
 	if err := NotifyReady(); err != nil {
 		return fmt.Errorf("notify ready: %w", err)
+	}
+	if r.upgrade != nil {
+		r.upgrade.MarkSystemReady()
 	}
 	watchdogDone := make(chan struct{})
 	go func() {
@@ -294,6 +312,13 @@ func (r *Runtime) commandHandlers() map[controlproto.Action]CommandHandler {
 		controlproto.SelfCheck: func(ctx context.Context, payload json.RawMessage, _ string) CommandOutcome {
 			return r.HandleSelfCheck(ctx, payload)
 		},
+		controlproto.Upgrade: func(ctx context.Context, payload json.RawMessage, commandID string) CommandOutcome {
+			snapshot := r.snapshot()
+			if r.upgrade == nil || snapshot == nil || snapshot.cfg == nil || !snapshot.cfg.Collect.Upgradable {
+				return CommandOutcome{Code: "upgrade_disabled", Data: json.RawMessage(`{}`), Failed: true}
+			}
+			return r.upgrade.Handle(ctx, payload, commandID)
+		},
 	}
 }
 
@@ -332,6 +357,9 @@ func (r *Runtime) collectOnce(parent context.Context) error {
 		return err
 	}
 	r.lastReport.Store("report_acknowledged")
+	if r.upgrade != nil {
+		r.upgrade.MarkReportReady()
+	}
 	r.logger.Debugf("reported node=%s services=%d collect_ms=%d", report.NodeID, len(report.Services), report.CollectMS)
 	return nil
 }

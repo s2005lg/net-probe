@@ -29,6 +29,7 @@ type Server struct {
 	commandStore      *panelcommand.Store
 	commandDispatcher *panelcommand.Dispatcher
 	ConfigPath        string
+	PanelVersion      string
 }
 
 func New(d *sql.DB, cfg *config.Config, observers ...NodeGeoObserver) *Server {
@@ -51,6 +52,9 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("GET /api/v1/agents/control", s.requireAgent(s.handleControl))
 	mux.Handle("GET /api/v1/admin/agents/{id}/commands", s.requireRole(auth.Viewer, s.handleCommandHistory))
 	mux.Handle("POST /api/v1/admin/agents/{id}/commands", s.requireRole(auth.Operator, s.handleCreateCommand))
+	mux.Handle("GET /api/v1/admin/releases", s.requireRole(auth.Viewer, s.handleReleases))
+	mux.Handle("POST /api/v1/admin/releases", s.requireRole(auth.Admin, s.handleImportRelease))
+	mux.Handle("POST /api/v1/admin/upgrades", s.requireRole(auth.Admin, s.handleCreateUpgrades))
 	mux.Handle("POST /api/v1/admin/enrollments", s.requireRole(auth.Admin, s.handleCreateEnrollment))
 	mux.Handle("POST /api/v1/admin/agents/{id}/revoke", s.requireRole(auth.Admin, s.handleRevokeAgent))
 	mux.HandleFunc("POST /api/v1/admin/login", s.handleLogin)

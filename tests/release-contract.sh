@@ -17,6 +17,11 @@ contains README.md "NET_PROBE_PANEL_VERSION=v0.1.0"
 contains .github/workflows/release.yml "sha256sum net-probe_linux_amd64 net-probe_linux_arm64 net-probe-panel_linux_amd64 net-probe-panel_linux_arm64 > SHA256SUMS"
 contains .github/workflows/release.yml "sha256sum --check SHA256SUMS"
 contains .github/workflows/release.yml "npm run verify"
+contains .github/workflows/release.yml 'NET_PROBE_RELEASE_SIGNING_KEY_B64: ${{ secrets.NET_PROBE_RELEASE_SIGNING_KEY_B64 }}'
+contains .github/workflows/release.yml "go run ./cmd/net-probe-release -print-public-key"
+contains .github/workflows/release.yml "-X main.releasePublicKeyHex="
+contains .github/workflows/release.yml "net-probe_linux_amd64.manifest.json"
+contains .github/workflows/release.yml "net-probe_linux_amd64.manifest.sig"
 
 publish_files="$(awk '
   /^[[:space:]]*- name: Publish release$/ { in_publish = 1; next }
@@ -34,6 +39,10 @@ for artifact in \
   net-probe_linux_arm64 \
   net-probe-panel_linux_amd64 \
   net-probe-panel_linux_arm64 \
+  net-probe_linux_amd64.manifest.json \
+  net-probe_linux_amd64.manifest.sig \
+  net-probe_linux_arm64.manifest.json \
+  net-probe_linux_arm64.manifest.sig \
   SHA256SUMS; do
   grep -Fxq -- "$artifact" <<<"$publish_files" || fail "release upload missing: $artifact"
 done

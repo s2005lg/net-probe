@@ -217,3 +217,21 @@ func TestApplyAgentResultAdvancesLifecycleAndIsIdempotent(t *testing.T) {
 		t.Fatalf("events accepted=%d running=%d succeeded=%d", accepted, running, succeeded)
 	}
 }
+
+func TestQueuedForResendsRunningCommandAfterAgentReconnect(t *testing.T) {
+	store, _, _ := openCommandStore(t)
+	command := createCommand(t, store, controlproto.Upgrade, `{"manifest":{}}`)
+	actor := auth.Actor{UserID: 1, Role: auth.Admin}
+	for _, state := range []State{Dispatched, Accepted, Running} {
+		if err := store.Transition(context.Background(), command.CommandID, state, actor, "test_transition", "", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	queued, err := store.QueuedFor(context.Background(), storeAgentID, time.Unix(command.IssuedAt+1, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(queued) != 1 || queued[0].CommandID != command.CommandID {
+		t.Fatalf("outstanding=%+v", queued)
+	}
+}

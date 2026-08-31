@@ -179,7 +179,7 @@ func allowedTransition(from, to State) bool {
 
 func (s *Store) QueuedFor(ctx context.Context, agentID string, now time.Time) ([]controlproto.Command, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT control_version,message_type,command_id,sequence,agent_id,action,issued_at,expires_at,payload,signature
-		FROM agent_commands WHERE agent_id=? AND state IN ('queued','dispatched') AND expires_at>? ORDER BY sequence`, agentID, now.Unix())
+		FROM agent_commands WHERE agent_id=? AND state IN ('queued','dispatched','accepted','running') AND expires_at>? ORDER BY sequence`, agentID, now.Unix())
 	if err != nil {
 		return nil, err
 	}

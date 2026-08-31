@@ -412,6 +412,25 @@ func parseEd25519PublicKey(body []byte) (ed25519.PublicKey, error) {
 	return ed25519.PublicKey(bytes.Clone(public)), nil
 }
 
+func VerifyReleaseKeyPin(path, expectedHex string) error {
+	expected, err := hex.DecodeString(expectedHex)
+	if err != nil || len(expected) != ed25519.PublicKeySize || expectedHex != strings.ToLower(expectedHex) {
+		return errors.New("embedded release verification key is invalid")
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read release verification key: %w", err)
+	}
+	actual, err := parseEd25519PublicKey(body)
+	if err != nil {
+		return fmt.Errorf("parse release verification key: %w", err)
+	}
+	if subtle.ConstantTimeCompare(expected, actual) != 1 {
+		return errors.New("enrolled release verification key does not match Agent binary")
+	}
+	return nil
+}
+
 func encodeECPrivateKey(key *ecdsa.PrivateKey) []byte {
 	der, _ := x509.MarshalECPrivateKey(key)
 	return pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})

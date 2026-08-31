@@ -159,3 +159,34 @@ func TestExecutorPresenceGettersDoNotBlockDuringCommand(t *testing.T) {
 		t.Fatalf("result=%+v", result)
 	}
 }
+
+func TestExecutorPersistsRunningOutcomeAndResumesAfterRestart(t *testing.T) {
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateDir := t.TempDir()
+	var finished atomic.Bool
+	handler := func(context.Context, json.RawMessage, string) CommandOutcome {
+		if !finished.Load() {
+			return CommandOutcome{Code: "upgrade_staged", Data: json.RawMessage(`{}`), Pending: true}
+		}
+		return CommandOutcome{Code: "upgrade_applied", Data: json.RawMessage(`{}`)}
+	}
+	first, err := OpenCommandExecutor(stateDir, executorAgentID, public, map[controlproto.Action]CommandHandler{controlproto.Upgrade: handler})
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := signedExecutorCommand(t, private, 1, controlproto.Upgrade, `{}`)
+	if result := first.Execute(context.Background(), command); result.State != "running" || result.Code != "upgrade_staged" || first.HighestCompleted() != 0 {
+		t.Fatalf("staged result=%+v highest=%d", result, first.HighestCompleted())
+	}
+	finished.Store(true)
+	second, err := OpenCommandExecutor(stateDir, executorAgentID, public, map[controlproto.Action]CommandHandler{controlproto.Upgrade: handler})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := second.Execute(context.Background(), command); result.State != "succeeded" || result.Code != "upgrade_applied" || second.HighestCompleted() != 1 {
+		t.Fatalf("resumed result=%+v highest=%d", result, second.HighestCompleted())
+	}
+}

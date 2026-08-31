@@ -79,6 +79,7 @@ func main() {
 
 	apiServer := api.New(d, cfg, refresher)
 	apiServer.ConfigPath = *cfgPath
+	apiServer.PanelVersion = version
 	srv, manager, err := newPanelTLSServer(cfg, apiServer.Routes())
 	if err != nil {
 		log.Fatalf("configure private PKI: %v", err)

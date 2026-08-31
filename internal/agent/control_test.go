@@ -31,7 +31,9 @@ func TestControlClientConnectsWithMTLSAndSendsHeartbeat(t *testing.T) {
 	client.heartbeatOverride = 20 * time.Millisecond
 	client.transientBackoff = func(int) time.Duration { return 10 * time.Millisecond }
 	var heartbeats atomic.Int32
+	var welcomes atomic.Int32
 	client.onHeartbeat = func(controlproto.Heartbeat) { heartbeats.Add(1) }
+	client.options.OnWelcome = func() { welcomes.Add(1) }
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- client.Run(ctx) }()
@@ -42,7 +44,7 @@ func TestControlClientConnectsWithMTLSAndSendsHeartbeat(t *testing.T) {
 		var capabilities, version string
 		err := panel.DB.QueryRow(`SELECT last_connected_at,last_heartbeat_at,capabilities_json,agent_version FROM agent_identities WHERE agent_id=?`, identity.AgentID).
 			Scan(&connectedAt, &heartbeatAt, &capabilities, &version)
-		if err == nil && connectedAt > 0 && heartbeatAt >= connectedAt && capabilities != "[]" && version == "v1.2.3" && heartbeats.Load() > 0 {
+		if err == nil && connectedAt > 0 && heartbeatAt >= connectedAt && capabilities != "[]" && version == "v1.2.3" && heartbeats.Load() > 0 && welcomes.Load() > 0 {
 			break
 		}
 		if time.Now().After(deadline) {

@@ -155,6 +155,17 @@ func TestEnrollmentPersistsLoadableIdentityWithPrivateFileModes(t *testing.T) {
 	if loaded.AgentID != id.AgentID || !bytes.Equal(loaded.CommandKey, id.CommandKey) || !bytes.Equal(loaded.ReleaseKey, id.ReleaseKey) {
 		t.Fatalf("loaded=%+v enrolled=%+v", loaded, id)
 	}
+	pin := hex.EncodeToString(id.ReleaseKey)
+	if err := VerifyReleaseKeyPin(filepath.Join(pkiDir, releaseKeyFile), pin); err != nil {
+		t.Fatal(err)
+	}
+	changedPin := "0" + pin[1:]
+	if changedPin == pin {
+		changedPin = "1" + pin[1:]
+	}
+	if err := VerifyReleaseKeyPin(filepath.Join(pkiDir, releaseKeyFile), changedPin); err == nil {
+		t.Fatal("accepted release key that differs from embedded pin")
+	}
 	var nodeID, version string
 	if err := panel.DB.QueryRow(`SELECT node_id,agent_version FROM agent_identities WHERE agent_id=?`, id.AgentID).Scan(&nodeID, &version); err != nil {
 		t.Fatal(err)

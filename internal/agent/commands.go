@@ -22,9 +22,11 @@ import (
 const commandStateFile = "commands.json"
 
 type CommandOutcome struct {
-	Code   string
-	Data   json.RawMessage
-	Failed bool
+	Code         string
+	Data         json.RawMessage
+	Failed       bool
+	Pending      bool
+	AfterPersist func()
 }
 
 type CommandHandler func(context.Context, json.RawMessage, string) CommandOutcome
@@ -174,15 +176,22 @@ func (e *CommandExecutor) resumeLocked(ctx context.Context, command controlproto
 	e.mu.Unlock()
 	outcome := callCommandHandler(ctx, handler, command.Payload, command.CommandID)
 	e.currentID.Store("")
+	if outcome.Pending && outcome.Failed {
+		outcome = CommandOutcome{Code: "invalid_handler_result", Data: json.RawMessage(`{}`), Failed: true}
+	}
 	state := "succeeded"
 	if outcome.Failed {
 		state = "failed"
+	}
+	if outcome.Pending {
+		state = "running"
 	}
 	if outcome.Code == "" {
 		outcome.Code = state
 	}
 	if len(outcome.Code) > 128 || len(outcome.Data) > 16*1024 || (len(outcome.Data) > 0 && !json.Valid(outcome.Data)) {
 		state, outcome.Code, outcome.Data = "failed", "invalid_handler_result", json.RawMessage(`{}`)
+		outcome.Pending = false
 	}
 	if len(outcome.Data) == 0 {
 		outcome.Data = json.RawMessage(`{}`)
@@ -194,7 +203,7 @@ func (e *CommandExecutor) resumeLocked(ctx context.Context, command controlproto
 		ControlVersion: controlproto.Version, Type: "command_result", CommandID: command.CommandID,
 		Sequence: command.Sequence, State: state, Code: outcome.Code, Data: append(json.RawMessage(nil), outcome.Data...),
 	}
-	if command.Sequence > e.state.HighestCompleted {
+	if !outcome.Pending && command.Sequence > e.state.HighestCompleted {
 		e.state.HighestCompleted = command.Sequence
 	}
 	if err := e.persist(); err != nil {
@@ -204,6 +213,12 @@ func (e *CommandExecutor) resumeLocked(ctx context.Context, command controlproto
 	e.completed.Store(e.state.HighestCompleted)
 	result := cloneCommandResult(record.Result)
 	e.mu.Unlock()
+	if outcome.AfterPersist != nil && !outcome.Pending {
+		func() {
+			defer func() { _ = recover() }()
+			outcome.AfterPersist()
+		}()
+	}
 	return result
 }
 
