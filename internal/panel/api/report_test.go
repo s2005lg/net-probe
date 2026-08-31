@@ -47,9 +47,8 @@ func TestHandleReport(t *testing.T) {
 	s := New(d, cfg)
 	body := `{"schema_version":"1","agent_version":"v0.1.1","node_id":"n1","collected_at":"2026-08-18T00:00:00Z","host":{"hostname":"h","load1":0.1,"load5":0.2,"load15":0.3,"mem_used_pct":12.5,"disk_used_pct":13.5},"services":[]}`
 	req := httptest.NewRequest("POST", "/api/v1/agents/report", strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer tok")
 	rr := httptest.NewRecorder()
-	s.handleReport(rr, req)
+	s.handleReport(rr, req, AgentIdentity{NodeID: "n1"})
 	if rr.Code != 200 || !strings.Contains(rr.Body.String(), `"ack":true`) {
 		t.Fatalf("code=%d body=%s", rr.Code, rr.Body.String())
 	}
@@ -61,9 +60,8 @@ func TestHandleReportObservesEgressIP(t *testing.T) {
 	s := New(d, cfg, observer)
 	body := `{"schema_version":"1","node_id":"n1","host":{"egress_ipv4":"8.8.8.8"},"services":[]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/report", strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer tok")
 	rr := httptest.NewRecorder()
-	s.handleReport(rr, req)
+	s.handleReport(rr, req, AgentIdentity{NodeID: "n1"})
 	if rr.Code != http.StatusOK || observer.nodeID != "n1" || observer.host.EgressIPv4 != "8.8.8.8" {
 		t.Fatalf("code=%d observer=%+v", rr.Code, observer)
 	}
@@ -75,9 +73,8 @@ func TestHandleReportObserverFailureStillAcknowledges(t *testing.T) {
 	s := New(d, cfg, observer)
 	body := `{"schema_version":"1","node_id":"n1","host":{"egress_ipv4":"8.8.8.8"},"services":[]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/report", strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer tok")
 	rr := httptest.NewRecorder()
-	s.handleReport(rr, req)
+	s.handleReport(rr, req, AgentIdentity{NodeID: "n1"})
 
 	var storedHost string
 	if err := d.QueryRow(`SELECT last_host_json FROM nodes WHERE node_id='n1'`).Scan(&storedHost); err != nil {
@@ -97,9 +94,8 @@ func TestHandleReportFailedNodePersistenceSkipsObserver(t *testing.T) {
 	s := New(d, cfg, observer)
 	body := `{"schema_version":"1","node_id":"n1","host":{"egress_ipv4":"8.8.8.8"},"services":[]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/report", strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer tok")
 	rr := httptest.NewRecorder()
-	s.handleReport(rr, req)
+	s.handleReport(rr, req, AgentIdentity{NodeID: "n1"})
 	if observer.nodeID != "" {
 		t.Fatalf("observer called after failed node persistence: %+v", observer)
 	}
@@ -127,11 +123,10 @@ func TestReportToGeoIntegration(t *testing.T) {
 	s := New(d, cfg, refresher)
 	body := `{"schema_version":"1","node_id":"n1","host":{"egress_ipv4":"8.8.8.8"},"services":[]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/report", strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer tok")
 	rr := httptest.NewRecorder()
 	ackDone := make(chan struct{})
 	go func() {
-		s.handleReport(rr, req)
+		s.handleReport(rr, req, AgentIdentity{NodeID: "n1"})
 		close(ackDone)
 	}()
 
@@ -174,9 +169,8 @@ func TestHandleExtendedReport(t *testing.T) {
 	s := New(d, cfg)
 	body := `{"schema_version":"1","agent_version":"v0.1.1","node_id":"n1","collected_at":"2026-08-18T00:00:00Z","host":{"hostname":"h","load1":0.1,"load5":0.2,"load15":0.3,"mem_used_pct":12.5,"disk_used_pct":13.5},"services":[{"type":"xray","protocols":{"state":"ok","items":["vless"],"source":"config"},"capabilities":{"traffic":{"support":"supported","source":"native_api"},"online_clients":{"support":"supported","source":"native_api"}},"telemetry":{"traffic":{"state":"ok","tx_bytes":0,"rx_bytes":0},"online_clients":{"state":"ok","value":0}}}]}`
 	req := httptest.NewRequest("POST", "/api/v1/agents/report", strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer tok")
 	rr := httptest.NewRecorder()
-	s.handleReport(rr, req)
+	s.handleReport(rr, req, AgentIdentity{NodeID: "n1"})
 	if rr.Code != http.StatusOK {
 		t.Fatalf("code=%d body=%s", rr.Code, rr.Body.String())
 	}
@@ -216,10 +210,23 @@ func TestHandleReportUnauthorized(t *testing.T) {
 	_, cfg := openTestDB(t)
 	s := New(nil, cfg)
 	req := httptest.NewRequest("POST", "/api/v1/agents/report", strings.NewReader(`{}`))
-	req.Header.Set("Authorization", "Bearer wrong")
 	rr := httptest.NewRecorder()
-	s.handleReport(rr, req)
+	s.Routes().ServeHTTP(rr, req)
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("code=%d", rr.Code)
+	}
+}
+
+func TestReportRejectsNodeIDDifferentFromCertificateBoundIdentity(t *testing.T) {
+	d, cfg := openTestDB(t)
+	s := New(d, cfg)
+	manager := configureAgentServer(t, s)
+	agent := registerAgent(t, s, manager, authAgentID, "node-bound", time.Now())
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/report", strings.NewReader(`{"schema_version":"1","node_id":"node-other","host":{},"services":[]}`))
+	attachVerifiedAgent(req, agent)
+	rr := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rr, req)
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
 	}
 }

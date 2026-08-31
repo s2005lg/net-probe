@@ -49,6 +49,38 @@ func TestRunExitZero(t *testing.T) {
 	}
 }
 
+func TestRunReportsToPanelWithEnrolledMTLSIdentity(t *testing.T) {
+	panel := startEnrollmentPanel(t)
+	pkiDir := t.TempDir()
+	const nodeID = "node-run-mtls"
+	if _, err := Enroll(context.Background(), insecureBootstrapClient(), EnrollmentOptions{
+		PanelURL: panel.URL, CAFingerprint: panel.Fingerprint, Code: panel.Code,
+		PKIDir: pkiDir, NodeID: nodeID, Version: "v1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Agent.NodeID = nodeID
+	cfg.Panel.URL = panel.URL
+	cfg.Panel.CAFile = filepath.Join(pkiDir, caBundleFile)
+	cfg.Panel.CertFile = filepath.Join(pkiDir, agentCertFile)
+	cfg.Panel.KeyFile = filepath.Join(pkiDir, agentKeyFile)
+	cfg.Panel.CommandKeyFile = filepath.Join(pkiDir, commandKeyFile)
+	cfg.Panel.ReleaseKeyFile = filepath.Join(pkiDir, releaseKeyFile)
+	cfg.Collect.EgressIP.Enabled = false
+	cfg.Detect.CustomDir = t.TempDir()
+	if rc := Run(context.Background(), cfg, "v1", fakeRunner{}); rc != 0 {
+		t.Fatalf("rc=%d", rc)
+	}
+	var reports int
+	if err := panel.DB.QueryRow(`SELECT count(*) FROM nodes WHERE node_id=?`, nodeID).Scan(&reports); err != nil {
+		t.Fatal(err)
+	}
+	if reports != 1 {
+		t.Fatalf("Panel reports=%d", reports)
+	}
+}
+
 func TestPersistedNodeID(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", dir)

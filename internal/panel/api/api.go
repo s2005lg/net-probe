@@ -9,6 +9,7 @@ import (
 
 	"github.com/s2005lg/net-probe/internal/panel/auth"
 	"github.com/s2005lg/net-probe/internal/panel/config"
+	"github.com/s2005lg/net-probe/internal/panel/pki"
 	"github.com/s2005lg/net-probe/internal/report"
 )
 
@@ -20,6 +21,8 @@ type Server struct {
 	db          *sql.DB
 	cfg         *config.Config
 	geoObserver NodeGeoObserver
+	pkiManager  *pki.Manager
+	releaseKey  ReleasePublicKeyProvider
 	ConfigPath  string
 }
 
@@ -33,7 +36,12 @@ func New(d *sql.DB, cfg *config.Config, observers ...NodeGeoObserver) *Server {
 
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/v1/agents/report", s.handleReport)
+	mux.HandleFunc("GET /api/v1/ca", s.handleCA)
+	mux.HandleFunc("POST /api/v1/agents/enroll", s.handleEnroll)
+	mux.Handle("POST /api/v1/agents/renew", s.requireAgent(s.handleRenew))
+	mux.Handle("POST /api/v1/agents/report", s.requireAgent(s.handleReport))
+	mux.Handle("POST /api/v1/admin/enrollments", s.requireRole(auth.Admin, s.handleCreateEnrollment))
+	mux.Handle("POST /api/v1/admin/agents/{id}/revoke", s.requireRole(auth.Admin, s.handleRevokeAgent))
 	mux.HandleFunc("POST /api/v1/admin/login", s.handleLogin)
 	mux.Handle("POST /api/v1/admin/logout", s.requireRole(auth.Viewer, s.handleLogout))
 	mux.Handle("GET /api/v1/admin/me", s.requireRole(auth.Viewer, s.handleMe))

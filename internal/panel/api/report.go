@@ -9,15 +9,14 @@ import (
 	"github.com/s2005lg/net-probe/internal/report"
 )
 
-func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("Authorization") != "Bearer "+s.cfg.Agent.Token {
-		http.Error(w, `{"error":{"code":"unauthorized"}}`, http.StatusUnauthorized)
+func (s *Server) handleReport(w http.ResponseWriter, r *http.Request, identity AgentIdentity) {
+	var rep report.Report
+	if err := decodeStrictJSON(r.Body, &rep); err != nil || rep.NodeID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"code": "bad_request"}})
 		return
 	}
-
-	var rep report.Report
-	if err := json.NewDecoder(r.Body).Decode(&rep); err != nil || rep.NodeID == "" {
-		http.Error(w, `{"error":{"code":"bad_request"}}`, http.StatusBadRequest)
+	if rep.NodeID != identity.NodeID {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": map[string]any{"code": "node_mismatch"}})
 		return
 	}
 
@@ -32,6 +31,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	_, _ = s.db.Exec(`INSERT INTO metrics(node_id,ts,granularity,load1,load5,load15,mem_used_pct,disk_used_pct,services_json)
 		VALUES(?,?,'raw',?,?,?,?,?,?)`,
 		rep.NodeID, now, rep.Host.Load1, rep.Host.Load5, rep.Host.Load15, rep.Host.MemUsedPct, rep.Host.DiskUsedPct, string(svcB))
+	_, _ = s.db.Exec(`UPDATE agent_identities SET last_heartbeat_at=?,agent_version=?,updated_at=? WHERE agent_id=? AND cert_serial=?`, now, rep.AgentVersion, now, identity.AgentID, identity.Serial)
 	if nodeErr == nil && s.geoObserver != nil {
 		if err := s.geoObserver.ObserveNode(r.Context(), rep.NodeID, rep.Host); err != nil {
 			log.Printf("geolocation observation failed for node %q", rep.NodeID)

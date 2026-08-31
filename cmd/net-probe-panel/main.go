@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"log"
@@ -22,6 +23,7 @@ import (
 )
 
 var version = "dev"
+var releasePublicKeyHex string
 
 func main() {
 	cfgPath := flag.String("config", "/etc/net-probe-panel/config.toml", "config file path")
@@ -81,10 +83,19 @@ func main() {
 	if err != nil {
 		log.Fatalf("configure private PKI: %v", err)
 	}
+	apiServer.ConfigureAgentPKI(manager, api.StaticReleasePublicKey(decodeReleasePublicKey()))
 	log.Printf("net-probe-panel listening on %s", cfg.ListenAddr)
 	if err := srv.ListenAndServeTLS(manager.ServerCertFile, manager.ServerKeyFile); err != nil {
 		log.Fatalf("serve: %v", err)
 	}
+}
+
+func decodeReleasePublicKey() []byte {
+	key, err := hex.DecodeString(releasePublicKeyHex)
+	if err != nil {
+		return nil
+	}
+	return key
 }
 
 func newPanelTLSServer(cfg *config.Config, handler http.Handler) (*http.Server, *pki.Manager, error) {

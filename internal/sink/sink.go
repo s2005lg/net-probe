@@ -27,6 +27,9 @@ type httpSink struct {
 }
 
 func New(cfg config.Sink, nodeID string) (Sink, error) {
+	if cfg.Type == "panel" {
+		return nil, fmt.Errorf("Panel reporting requires a certificate-bound Panel sink")
+	}
 	token, err := config.ResolveToken(cfg)
 	if err != nil {
 		return nil, err
@@ -52,6 +55,20 @@ func New(cfg config.Sink, nodeID string) (Sink, error) {
 		client.Transport = &http.Transport{TLSClientConfig: tlsCfg}
 	}
 	return &httpSink{cfg: cfg, token: token, method: method, nodeID: nodeID, client: client}, nil
+}
+
+func NewPanel(panelURL string, tlsConfig *tls.Config) (Sink, error) {
+	if tlsConfig == nil {
+		return nil, fmt.Errorf("Panel mTLS configuration is required")
+	}
+	if !strings.HasPrefix(strings.ToLower(panelURL), "https://") {
+		return nil, fmt.Errorf("Panel URL must use HTTPS")
+	}
+	client := &http.Client{
+		Timeout:   10 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: tlsConfig.Clone()},
+	}
+	return &httpSink{cfg: config.Sink{Type: "panel", URL: panelURL}, method: http.MethodPost, client: client}, nil
 }
 
 func (s *httpSink) Send(ctx context.Context, body []byte) error {

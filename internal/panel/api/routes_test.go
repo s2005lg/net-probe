@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/s2005lg/net-probe/internal/panel/auth"
 )
@@ -12,11 +13,13 @@ import (
 func TestRoutes(t *testing.T) {
 	d, cfg := openTestDB(t)
 	s := New(d, cfg)
+	manager := configureAgentServer(t, s)
+	agent := registerAgent(t, s, manager, authAgentID, "n1", time.Now())
 	h := s.Routes()
 
 	body := `{"schema_version":"1","node_id":"n1","host":{"hostname":"h","load1":0.1,"load5":0.2,"load15":0.3,"mem_used_pct":12.5,"disk_used_pct":13.5},"services":[]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/report", strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer tok")
+	attachVerifiedAgent(req, agent)
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"ack":true`) {

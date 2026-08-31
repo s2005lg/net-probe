@@ -150,6 +150,27 @@ func Run(ctx context.Context, cfg *config.Config, version string, runner detect.
 		return 2
 	}
 	rc := 0
+	if cfg.Panel.URL != "" {
+		identity, err := LoadIdentity(cfg.Panel.URL, filepath.Dir(cfg.Panel.CAFile))
+		if err != nil {
+			logger.Errorf("load Panel identity: %v", err)
+			rc = 1
+		} else if err := RenewIfNeeded(ctx, identity, time.Now()); err != nil {
+			logger.Errorf("renew Panel identity: %v", err)
+			rc = 1
+		} else {
+			panelSink, err := sink.NewPanel(cfg.Panel.URL, identity.TLSConfig)
+			if err != nil {
+				logger.Errorf("init Panel sink: %v", err)
+				rc = 1
+			} else if err := sendWithRetry(ctx, panelSink, body); err != nil {
+				logger.Errorf("Panel sink failed: %v", err)
+				rc = 1
+			} else {
+				logger.Debugf("Panel sink ok")
+			}
+		}
+	}
 	for _, sc := range cfg.Sinks {
 		s, err := sink.New(sc, rep.NodeID)
 		if err != nil {

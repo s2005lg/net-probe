@@ -18,13 +18,11 @@ import (
 func TestPanelIntegration(t *testing.T) {
 	const fixtureUUID = "fixture-vless-uuid"
 	const statsSecret = "fixture-stats-secret"
-	const panelToken = "fixture-panel-token"
 	const configBody = `{"inbounds":[{"protocol":"vless","settings":{"clients":[{"id":"fixture-vless-uuid"}]}}]}`
-	t.Setenv("NP_TOKEN", panelToken)
 
 	var gotAuth, gotAgent, gotPath, rawBody string
 	var body map[string]any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
 		gotAgent = r.Header.Get("X-Agent-Id")
 		gotPath = r.URL.Path
@@ -43,7 +41,6 @@ func TestPanelIntegration(t *testing.T) {
 	cfg.Collect.EgressIP.Enabled = false
 	cfg.Detect.CustomDir = t.TempDir()
 	cfg.Agent.NodeID = "node-1"
-	cfg.Sinks = []config.Sink{{Type: "panel", URL: srv.URL, TokenEnv: "NP_TOKEN"}}
 	cfg.Stats.Services = map[string]config.StatsService{
 		"xray": {Endpoint: "127.0.0.1:10085", Secret: statsSecret},
 	}
@@ -65,7 +62,8 @@ func TestPanelIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s, err := sink.New(cfg.Sinks[0], rep.NodeID)
+	tlsConfig := srv.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+	s, err := sink.NewPanel(srv.URL, tlsConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,11 +74,11 @@ func TestPanelIntegration(t *testing.T) {
 	if gotPath != "/api/v1/agents/report" {
 		t.Fatalf("path = %q", gotPath)
 	}
-	if gotAuth != "Bearer "+panelToken {
-		t.Fatalf("auth = %q", gotAuth)
+	if gotAuth != "" {
+		t.Fatalf("unexpected auth = %q", gotAuth)
 	}
-	if gotAgent != "node-1" {
-		t.Fatalf("agent id = %q", gotAgent)
+	if gotAgent != "" {
+		t.Fatalf("unexpected Agent header = %q", gotAgent)
 	}
 	if body["schema_version"] != "1" || body["agent_version"] != "0.1.0" || body["node_id"] != "node-1" {
 		t.Fatalf("top-level fields = %v", body)
@@ -117,7 +115,7 @@ func TestPanelIntegration(t *testing.T) {
 	if stats["tx"] != float64(7) || stats["rx"] != float64(9) || stats["online_clients"] != float64(1) {
 		t.Fatalf("stats=%v", stats)
 	}
-	for _, private := range []string{fixtureUUID, statsSecret, gotAuth, configBody} {
+	for _, private := range []string{fixtureUUID, statsSecret, configBody} {
 		if strings.Contains(rawBody, private) {
 			t.Fatalf("report leaked private fixture value %q: %s", private, rawBody)
 		}
