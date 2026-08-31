@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/s2005lg/net-probe/internal/agent"
+	"github.com/s2005lg/net-probe/internal/config"
+	"github.com/s2005lg/net-probe/internal/detect"
 )
 
 func TestEnrollCLIReadsCodeOnlyFromStdinAndPrintsNoSecret(t *testing.T) {
@@ -75,3 +77,69 @@ url = "https://old-panel.example.com"
 }
 
 func gotIdentityID() string { return "123e4567-e89b-42d3-a456-426614174020" }
+
+type fakeResident struct{ ran bool }
+
+func (r *fakeResident) Run(context.Context) error {
+	r.ran = true
+	return nil
+}
+
+func TestCLIUsesResidentModeByDefaultAndOnceOnlyWhenRequested(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	configDir := filepath.Join(configHome, "net-probe")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(configDir, "config.toml")
+	writeCLIConfig(t, configPath)
+	resident := &fakeResident{}
+	onceCalls := 0
+	deps := cliDependencies{
+		runOnce: func(context.Context, *config.Config, string, detect.Runner) int {
+			onceCalls++
+			return 0
+		},
+		newResident: func(string, *config.Config, string, detect.Runner) (residentRunner, error) {
+			return resident, nil
+		},
+	}
+	if rc := runCLIWithDependencies(nil, strings.NewReader(""), io.Discard, io.Discard, nil, deps); rc != 0 {
+		t.Fatalf("resident rc=%d", rc)
+	}
+	if !resident.ran || onceCalls != 0 {
+		t.Fatalf("resident=%v once=%d", resident.ran, onceCalls)
+	}
+
+	resident.ran = false
+	if rc := runCLIWithDependencies([]string{"--once"}, strings.NewReader(""), io.Discard, io.Discard, nil, deps); rc != 0 {
+		t.Fatalf("once rc=%d", rc)
+	}
+	if resident.ran || onceCalls != 1 {
+		t.Fatalf("resident=%v once=%d", resident.ran, onceCalls)
+	}
+}
+
+func writeCLIConfig(t *testing.T, path string) {
+	t.Helper()
+	body := `[agent]
+report_interval = "60s"
+collect_timeout = "45s"
+shutdown_timeout = "20s"
+
+[panel]
+url = "https://panel.example.com"
+ca_file = "/tmp/ca.crt"
+cert_file = "/tmp/agent.crt"
+key_file = "/tmp/agent.key"
+command_key_file = "/tmp/command.pub"
+release_key_file = "/tmp/release.pub"
+
+[collect.egress_ip]
+enabled = false
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
