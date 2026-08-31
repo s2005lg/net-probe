@@ -11,26 +11,34 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/s2005lg/net-probe/internal/controlproto"
 	"github.com/s2005lg/net-probe/internal/panel/auth"
 	panelgeo "github.com/s2005lg/net-probe/internal/panel/geo"
 	"github.com/s2005lg/net-probe/internal/report"
 )
 
 type nodeRow struct {
-	NodeID         string          `json:"node_id"`
-	Alias          string          `json:"alias"`
-	Tags           []string        `json:"tags"`
-	MutedUntil     int64           `json:"muted_until"`
-	LastReportAt   int64           `json:"last_report_at"`
-	Host           json.RawMessage `json:"host"`
-	Services       json.RawMessage `json:"services"`
-	EffectiveIP    string          `json:"effective_ip"`
-	Status         string          `json:"status"`
-	IPLocation     string          `json:"ip_location"`
-	IPCountry      string          `json:"ip_country"`
-	IPRegion       string          `json:"ip_region"`
-	IPCity         string          `json:"ip_city"`
-	IPGeoUpdatedAt int64           `json:"ip_geo_updated_at"`
+	NodeID          string                `json:"node_id"`
+	Alias           string                `json:"alias"`
+	Tags            []string              `json:"tags"`
+	MutedUntil      int64                 `json:"muted_until"`
+	LastReportAt    int64                 `json:"last_report_at"`
+	Host            json.RawMessage       `json:"host"`
+	Services        json.RawMessage       `json:"services"`
+	EffectiveIP     string                `json:"effective_ip"`
+	Status          string                `json:"status"`
+	IPLocation      string                `json:"ip_location"`
+	IPCountry       string                `json:"ip_country"`
+	IPRegion        string                `json:"ip_region"`
+	IPCity          string                `json:"ip_city"`
+	IPGeoUpdatedAt  int64                 `json:"ip_geo_updated_at"`
+	ControlStatus   string                `json:"control_status"`
+	LastHeartbeatAt int64                 `json:"last_heartbeat_at"`
+	AgentVersion    string                `json:"agent_version"`
+	AgentOS         string                `json:"agent_os"`
+	AgentArch       string                `json:"agent_arch"`
+	CertExpiresAt   int64                 `json:"certificate_expires_at"`
+	Capabilities    []controlproto.Action `json:"agent_capabilities"`
 }
 
 type nodeListResponse struct {
@@ -40,7 +48,7 @@ type nodeListResponse struct {
 	PageSize int       `json:"page_size"`
 }
 
-const nodeSelect = `SELECT node_id, COALESCE(alias,''), COALESCE(muted_until,0), COALESCE(last_report_at,0), COALESCE(last_host_json,'{}'), COALESCE(last_services_json,'[]'), COALESCE(ip_location,''), COALESCE(ip_country,''), COALESCE(ip_region,''), COALESCE(ip_city,''), COALESCE(ip_geo_updated_at,0) FROM nodes`
+const nodeSelect = `SELECT n.node_id, COALESCE(n.alias,''), COALESCE(n.muted_until,0), COALESCE(n.last_report_at,0), COALESCE(n.last_host_json,'{}'), COALESCE(n.last_services_json,'[]'), COALESCE(n.ip_location,''), COALESCE(n.ip_country,''), COALESCE(n.ip_region,''), COALESCE(n.ip_city,''), COALESCE(n.ip_geo_updated_at,0), COALESCE(ai.last_heartbeat_at,0), COALESCE(ai.agent_version,''), COALESCE(ai.os,''), COALESCE(ai.arch,''), COALESCE(ai.expires_at,0), COALESCE(ai.capabilities_json,'[]') FROM nodes n LEFT JOIN agent_identities ai ON ai.node_id=n.node_id AND ai.revoked_at=0`
 
 type metricRow struct {
 	TS          int64           `json:"ts"`
@@ -55,15 +63,26 @@ type metricRow struct {
 
 func scanNode(scanner interface{ Scan(...any) error }) (nodeRow, error) {
 	var n nodeRow
-	var host, services string
-	err := scanner.Scan(&n.NodeID, &n.Alias, &n.MutedUntil, &n.LastReportAt, &host, &services, &n.IPLocation, &n.IPCountry, &n.IPRegion, &n.IPCity, &n.IPGeoUpdatedAt)
+	var host, services, capabilities string
+	err := scanner.Scan(&n.NodeID, &n.Alias, &n.MutedUntil, &n.LastReportAt, &host, &services, &n.IPLocation, &n.IPCountry, &n.IPRegion, &n.IPCity, &n.IPGeoUpdatedAt,
+		&n.LastHeartbeatAt, &n.AgentVersion, &n.AgentOS, &n.AgentArch, &n.CertExpiresAt, &capabilities)
 	n.Host = json.RawMessage(host)
 	n.Services = json.RawMessage(services)
+	n.Capabilities = make([]controlproto.Action, 0)
+	_ = json.Unmarshal([]byte(capabilities), &n.Capabilities)
+	n.ControlStatus = controlStatus(n.LastHeartbeatAt)
 	var reportHost report.Host
 	if json.Unmarshal(n.Host, &reportHost) == nil {
 		n.EffectiveIP = panelgeo.EffectiveIP(reportHost)
 	}
 	return n, err
+}
+
+func controlStatus(lastHeartbeatAt int64) string {
+	if lastHeartbeatAt == 0 || lastHeartbeatAt < time.Now().Add(-controlproto.OfflineTimeout).Unix() {
+		return "offline"
+	}
+	return "online"
 }
 
 func (s *Server) nodeTimeout() time.Duration {
@@ -96,13 +115,13 @@ func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 
 	where, args := nodeFilter(q, s.nodeTimeout())
 	var total int
-	if err := s.db.QueryRow(`SELECT count(*) FROM nodes WHERE `+where, args...).Scan(&total); err != nil {
+	if err := s.db.QueryRow(`SELECT count(*) FROM nodes n WHERE `+where, args...).Scan(&total); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
 		return
 	}
 
 	args = append(args, pageSize, (page-1)*pageSize)
-	rows, err := s.db.Query(nodeSelect+` WHERE `+where+` ORDER BY COALESCE(last_report_at,0) DESC LIMIT ? OFFSET ?`, args...)
+	rows, err := s.db.Query(nodeSelect+` WHERE `+where+` ORDER BY COALESCE(n.last_report_at,0) DESC LIMIT ? OFFSET ?`, args...)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]any{"code": "db_error"}})
 		return
@@ -145,11 +164,11 @@ func nodeFilter(q map[string][]string, timeout time.Duration) (string, []any) {
 	}
 	if search := firstQuery(q, "q"); search != "" {
 		like := "%" + strings.ToLower(search) + "%"
-		where += " AND (LOWER(node_id) LIKE ? OR LOWER(COALESCE(alias,'')) LIKE ? OR LOWER(COALESCE(last_host_json,'{}')) LIKE ?)"
+		where += " AND (LOWER(n.node_id) LIKE ? OR LOWER(COALESCE(n.alias,'')) LIKE ? OR LOWER(COALESCE(n.last_host_json,'{}')) LIKE ?)"
 		args = append(args, like, like, like)
 	}
 	if tag := firstQuery(q, "tag"); tag != "" {
-		where += ` AND EXISTS (SELECT 1 FROM node_tags nt JOIN tags t ON t.id=nt.tag_id WHERE nt.node_id=nodes.id AND t.name=?)`
+		where += ` AND EXISTS (SELECT 1 FROM node_tags nt JOIN tags t ON t.id=nt.tag_id WHERE nt.node_id=n.id AND t.name=?)`
 		args = append(args, tag)
 	}
 	return where, args
@@ -193,7 +212,7 @@ func (s *Server) handleNodeDetail(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"code": "bad_request"}})
 		return
 	}
-	row := s.db.QueryRow(nodeSelect+` WHERE node_id=?`, nodeID)
+	row := s.db.QueryRow(nodeSelect+` WHERE n.node_id=?`, nodeID)
 	n, err := scanNode(row)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": map[string]any{"code": "not_found"}})
@@ -257,7 +276,7 @@ func (s *Server) handleNodePatch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	row := s.db.QueryRow(nodeSelect+` WHERE node_id=?`, nodeID)
+	row := s.db.QueryRow(nodeSelect+` WHERE n.node_id=?`, nodeID)
 	n, err := scanNode(row)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": map[string]any{"code": "not_found"}})

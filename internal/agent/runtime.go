@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/s2005lg/net-probe/internal/config"
+	"github.com/s2005lg/net-probe/internal/controlproto"
 	"github.com/s2005lg/net-probe/internal/detect"
 	"github.com/s2005lg/net-probe/internal/logx"
 	"github.com/s2005lg/net-probe/internal/sink"
@@ -21,6 +22,7 @@ type runtimeSnapshot struct {
 	cfg             *config.Config
 	identity        *Identity
 	reporter        *Reporter
+	control         *ControlClient
 	reportInterval  time.Duration
 	collectTimeout  time.Duration
 	shutdownTimeout time.Duration
@@ -100,9 +102,17 @@ func (r *Runtime) buildSnapshot(cfg *config.Config, outbox *Outbox) (*runtimeSna
 	if err != nil {
 		return nil, err
 	}
+	controlClient, err := NewControlClient(ControlOptions{
+		PanelURL: cfg.Panel.URL, Identity: identity, NodeID: NodeID(cfg), Version: r.version,
+		Capabilities: []controlproto.Action{controlproto.CollectNow, controlproto.ReloadConfig, controlproto.SelfCheck},
+		OutboxDepth:  reporter.OutboxDepth,
+	})
+	if err != nil {
+		return nil, err
+	}
 	return &runtimeSnapshot{
 		cfg: cfg, identity: identity, reporter: reporter, reportInterval: reportInterval,
-		collectTimeout: collectTimeout, shutdownTimeout: shutdownTimeout,
+		control: controlClient, collectTimeout: collectTimeout, shutdownTimeout: shutdownTimeout,
 	}, nil
 }
 
@@ -149,6 +159,8 @@ func (r *Runtime) Run(ctx context.Context) error {
 	r.mu.Unlock()
 	runContext, cancelRun := context.WithCancel(context.Background())
 	defer cancelRun()
+	controlContext, cancelControl := context.WithCancel(context.Background())
+	defer cancelControl()
 	if err := NotifyReady(); err != nil {
 		return fmt.Errorf("notify ready: %w", err)
 	}
@@ -157,6 +169,12 @@ func (r *Runtime) Run(ctx context.Context) error {
 		defer close(watchdogDone)
 		r.watchdog(runContext)
 	}()
+	controlDone := make(chan error, 1)
+	if snapshot.control == nil {
+		controlDone <- nil
+	} else {
+		go func() { controlDone <- snapshot.control.Run(controlContext) }()
+	}
 	schedulerDone := make(chan struct{})
 	go func() {
 		defer close(schedulerDone)
@@ -165,6 +183,7 @@ func (r *Runtime) Run(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		_ = NotifyStopping()
+		cancelControl()
 		scheduler.Stop()
 		grace := snapshot.shutdownTimeout
 		if latest := r.snapshot(); latest != nil && latest.shutdownTimeout > 0 {
@@ -184,8 +203,12 @@ func (r *Runtime) Run(ctx context.Context) error {
 			<-schedulerDone
 		}
 	case <-schedulerDone:
+		cancelControl()
 	}
 	cancelRun()
+	if err := <-controlDone; err != nil {
+		return err
+	}
 	r.mu.Lock()
 	if r.scheduler == scheduler {
 		r.scheduler = nil

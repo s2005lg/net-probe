@@ -265,6 +265,9 @@ func (s *Server) handleRevokeAgent(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": map[string]any{"code": "not_found"}})
 		return
 	}
+	if s.controlHub != nil {
+		s.controlHub.Disconnect(agentID, "revoked")
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
