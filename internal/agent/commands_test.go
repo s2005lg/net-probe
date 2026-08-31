@@ -119,3 +119,43 @@ func TestExecutorRejectsForgeryTargetFutureAndChangedDuplicate(t *testing.T) {
 		t.Fatalf("handler calls=%d", calls.Load())
 	}
 }
+
+func TestExecutorPresenceGettersDoNotBlockDuringCommand(t *testing.T) {
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	executor, err := OpenCommandExecutor(t.TempDir(), executorAgentID, public, map[controlproto.Action]CommandHandler{
+		controlproto.CollectNow: func(context.Context, json.RawMessage, string) CommandOutcome {
+			close(started)
+			<-release
+			return CommandOutcome{Code: "ok"}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := signedExecutorCommand(t, private, 1, controlproto.CollectNow, `{}`)
+	done := make(chan controlproto.CommandResult, 1)
+	go func() { done <- executor.Execute(context.Background(), command) }()
+	<-started
+	gettersDone := make(chan struct{})
+	go func() {
+		defer close(gettersDone)
+		if executor.CurrentCommandID() != command.CommandID {
+			t.Errorf("current command=%q", executor.CurrentCommandID())
+		}
+		_ = executor.HighestCompleted()
+	}()
+	select {
+	case <-gettersDone:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("presence getters blocked behind command handler")
+	}
+	close(release)
+	if result := <-done; result.State != "succeeded" {
+		t.Fatalf("result=%+v", result)
+	}
+}

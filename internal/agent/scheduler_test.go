@@ -87,3 +87,48 @@ func TestSchedulerJitterIsStableAndBounded(t *testing.T) {
 		t.Fatalf("jitter=%s repeat=%s", a, b)
 	}
 }
+
+func TestSchedulerRequestsDuringCollectionShareOneFollowupResult(t *testing.T) {
+	c := newBlockingCollector()
+	s := NewScheduler("agent-requests", time.Hour, c.Run)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { defer close(done); s.Run(ctx) }()
+	c.WaitStarted(t) // startup collection
+
+	results := make(chan error, 2)
+	go func() { results <- s.Request(ctx) }()
+	go func() { results <- s.Request(ctx) }()
+	deadline := time.Now().Add(time.Second)
+	for {
+		s.waitersMu.Lock()
+		waiting := len(s.waiters)
+		s.waitersMu.Unlock()
+		if waiting == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("queued requests=%d", waiting)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	c.Release()
+	c.WaitRuns(t, 2)
+	c.Release()
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-results:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("request did not receive collection result")
+		}
+	}
+	if c.Runs() != 2 {
+		t.Fatalf("runs=%d", c.Runs())
+	}
+	cancel()
+	<-done
+}

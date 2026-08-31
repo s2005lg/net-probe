@@ -84,6 +84,11 @@ func (q *Outbox) Put(body []byte, destinations []string) (string, error) {
 	if err := q.enforceLimitsLocked(); err != nil {
 		return "", err
 	}
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return "", errors.New("report exceeds durable outbox limits")
+	} else if err != nil {
+		return "", err
+	}
 	return id, nil
 }
 

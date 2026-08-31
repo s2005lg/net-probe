@@ -148,6 +148,13 @@ func (c *ControlClient) runSession(ctx context.Context) error {
 	defer heartbeatTicker.Stop()
 	pingTicker := time.NewTicker(heartbeatInterval)
 	defer pingTicker.Stop()
+	sessionContext, cancelSession := context.WithCancel(ctx)
+	defer cancelSession()
+	var commandQueue chan<- controlproto.Command
+	var commandResults <-chan controlproto.CommandResult
+	if c.options.HandleCommand != nil {
+		commandQueue, commandResults = startCommandWorker(sessionContext, 32, c.options.HandleCommand)
+	}
 	type inboundMessage struct {
 		messageType websocket.MessageType
 		body        []byte
@@ -188,13 +195,16 @@ func (c *ControlClient) runSession(ctx context.Context) error {
 			if c.options.HandleCommand == nil {
 				return permanentControlError{err: errors.New("control command executor unavailable")}
 			}
-			result := c.options.HandleCommand(ctx, command)
-			resultBody, err := json.Marshal(result)
-			if err != nil {
-				return err
+			select {
+			case commandQueue <- command:
+			default:
+				if err := writeCommandResult(ctx, connection, failedCommandResult(command, "command_backpressure")); err != nil {
+					return err
+				}
 			}
-			if err := connection.Write(ctx, websocket.MessageText, resultBody); err != nil {
-				return fmt.Errorf("write command result: %w", err)
+		case result := <-commandResults:
+			if err := writeCommandResult(ctx, connection, result); err != nil {
+				return err
 			}
 		case <-heartbeatTicker.C:
 			heartbeat := c.heartbeat()
@@ -214,6 +224,41 @@ func (c *ControlClient) runSession(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+func startCommandWorker(ctx context.Context, queueSize int, handler func(context.Context, controlproto.Command) controlproto.CommandResult) (chan<- controlproto.Command, <-chan controlproto.CommandResult) {
+	if queueSize <= 0 || queueSize > 32 {
+		queueSize = 32
+	}
+	queue := make(chan controlproto.Command, queueSize)
+	results := make(chan controlproto.CommandResult, queueSize)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case command := <-queue:
+				result := handler(ctx, command)
+				select {
+				case results <- result:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return queue, results
+}
+
+func writeCommandResult(ctx context.Context, connection *websocket.Conn, result controlproto.CommandResult) error {
+	resultBody, err := json.Marshal(result)
+	if err != nil {
+		return err
+	}
+	if err := connection.Write(ctx, websocket.MessageText, resultBody); err != nil {
+		return fmt.Errorf("write command result: %w", err)
+	}
+	return nil
 }
 
 func (c *ControlClient) heartbeat() controlproto.Heartbeat {

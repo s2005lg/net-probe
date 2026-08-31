@@ -94,3 +94,20 @@ func TestOutboxAcknowledgesDestinationsIndependently(t *testing.T) {
 		t.Fatalf("items=%+v", items)
 	}
 }
+
+func TestOutboxRejectsItemThatCannotFitInsteadOfReportingSuccess(t *testing.T) {
+	q, err := NewOutbox(t.TempDir(), Limits{MaxItems: 2, MaxBytes: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.Put([]byte("larger-than-limit"), []string{"panel"}); err == nil {
+		t.Fatal("oversized item was silently evicted")
+	}
+	items, err := q.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("items=%+v", items)
+	}
+}

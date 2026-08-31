@@ -132,6 +132,20 @@ func StrictDecode(data []byte, dst any) error {
 	return nil
 }
 
+// StrictDecodePayload decodes one bounded JSON payload and rejects unknown
+// fields and trailing values. Action-specific validation remains with callers.
+func StrictDecodePayload(data []byte, dst any) error {
+	if len(data) == 0 || len(data) > MaxMessageBytes {
+		return fmt.Errorf("invalid command payload size")
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		return fmt.Errorf("decode command payload: %w", err)
+	}
+	return ensureEOF(dec)
+}
+
 func ensureEOF(dec *json.Decoder) error {
 	var extra any
 	if err := dec.Decode(&extra); err != io.EOF {

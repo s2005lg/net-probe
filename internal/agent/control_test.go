@@ -61,3 +61,47 @@ func TestControlClientConnectsWithMTLSAndSendsHeartbeat(t *testing.T) {
 		t.Fatal("control client did not stop")
 	}
 }
+
+func TestCommandWorkerQueuesWithoutBlockingAndExecutesSerially(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := make(chan string, 2)
+	release := make(chan struct{}, 2)
+	var active atomic.Int32
+	var maximum atomic.Int32
+	handler := func(_ context.Context, command controlproto.Command) controlproto.CommandResult {
+		current := active.Add(1)
+		for {
+			prior := maximum.Load()
+			if current <= prior || maximum.CompareAndSwap(prior, current) {
+				break
+			}
+		}
+		started <- command.CommandID
+		<-release
+		active.Add(-1)
+		return failedCommandResult(command, "done")
+	}
+	queue, results := startCommandWorker(ctx, 2, handler)
+	queue <- controlproto.Command{CommandID: "first", Sequence: 1}
+	<-started
+	select {
+	case queue <- controlproto.Command{CommandID: "second", Sequence: 2}:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("caller blocked behind running command")
+	}
+	release <- struct{}{}
+	if result := <-results; result.CommandID != "first" {
+		t.Fatalf("first result=%+v", result)
+	}
+	if commandID := <-started; commandID != "second" {
+		t.Fatalf("second command=%q", commandID)
+	}
+	release <- struct{}{}
+	if result := <-results; result.CommandID != "second" {
+		t.Fatalf("second result=%+v", result)
+	}
+	if maximum.Load() != 1 {
+		t.Fatalf("maximum concurrent commands=%d", maximum.Load())
+	}
+}

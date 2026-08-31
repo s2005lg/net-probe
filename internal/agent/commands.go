@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/s2005lg/net-probe/internal/controlproto"
@@ -44,13 +45,15 @@ type executorState struct {
 }
 
 type CommandExecutor struct {
+	executeMu sync.Mutex
 	mu        sync.Mutex
 	stateDir  string
 	agentID   string
 	publicKey ed25519.PublicKey
 	handlers  map[controlproto.Action]CommandHandler
 	state     executorState
-	currentID string
+	currentID atomic.Value
+	completed atomic.Uint64
 	now       func() time.Time
 }
 
@@ -78,18 +81,13 @@ func OpenCommandExecutor(stateDir, agentID string, publicKey ed25519.PublicKey, 
 	if err := executor.load(); err != nil {
 		return nil, err
 	}
+	executor.currentID.Store("")
+	executor.completed.Store(executor.state.HighestCompleted)
 	return executor, nil
 }
 
 func (e *CommandExecutor) Execute(ctx context.Context, command controlproto.Command) controlproto.CommandResult {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	result := func(code string) controlproto.CommandResult {
-		return controlproto.CommandResult{
-			ControlVersion: controlproto.Version, Type: "command_result", CommandID: command.CommandID,
-			Sequence: command.Sequence, State: "failed", Code: code, Data: json.RawMessage(`{}`),
-		}
-	}
+	result := func(code string) controlproto.CommandResult { return failedCommandResult(command, code) }
 	if command.ControlVersion != controlproto.Version || command.Type != "command" || controlproto.TTL(command.Action) <= 0 || !json.Valid(command.Payload) {
 		return result("invalid_command")
 	}
@@ -106,6 +104,9 @@ func (e *CommandExecutor) Execute(ctx context.Context, command controlproto.Comm
 	if command.ExpiresAt <= now.Unix() || command.ExpiresAt <= command.IssuedAt {
 		return result("expired")
 	}
+	e.executeMu.Lock()
+	defer e.executeMu.Unlock()
+	e.mu.Lock()
 	digest := commandDigest(command)
 	for index := range e.state.Records {
 		record := &e.state.Records[index]
@@ -113,17 +114,22 @@ func (e *CommandExecutor) Execute(ctx context.Context, command controlproto.Comm
 			continue
 		}
 		if record.Sequence != command.Sequence || record.Digest != digest {
+			e.mu.Unlock()
 			return result("duplicate_mismatch")
 		}
 		if terminalCommandState(record.State) {
-			return cloneCommandResult(record.Result)
+			prior := cloneCommandResult(record.Result)
+			e.mu.Unlock()
+			return prior
 		}
-		return e.resume(ctx, command, record)
+		return e.resumeLocked(ctx, command, index)
 	}
 	if command.Sequence <= e.state.HighestSeen {
+		e.mu.Unlock()
 		return result("stale_sequence")
 	}
 	if e.handlers[command.Action] == nil {
+		e.mu.Unlock()
 		return result("unsupported_action")
 	}
 	record := commandRecord{
@@ -134,37 +140,40 @@ func (e *CommandExecutor) Execute(ctx context.Context, command controlproto.Comm
 	e.state.Records = append(e.state.Records, record)
 	e.trimRecords()
 	if err := e.persist(); err != nil {
+		e.mu.Unlock()
 		return result("state_write_failed")
 	}
 	for index := range e.state.Records {
 		if e.state.Records[index].CommandID == command.CommandID {
-			return e.resume(ctx, command, &e.state.Records[index])
+			return e.resumeLocked(ctx, command, index)
 		}
 	}
+	e.mu.Unlock()
 	return result("state_write_failed")
 }
 
-func (e *CommandExecutor) resume(ctx context.Context, command controlproto.Command, record *commandRecord) controlproto.CommandResult {
+// resumeLocked starts with e.mu held and releases it while the bounded action
+// runs, keeping presence getters responsive for heartbeats and reconnects.
+func (e *CommandExecutor) resumeLocked(ctx context.Context, command controlproto.Command, index int) controlproto.CommandResult {
 	handler := e.handlers[command.Action]
 	if handler == nil {
-		return controlproto.CommandResult{
-			ControlVersion: controlproto.Version, Type: "command_result", CommandID: command.CommandID,
-			Sequence: command.Sequence, State: "failed", Code: "unsupported_action", Data: json.RawMessage(`{}`),
-		}
+		e.mu.Unlock()
+		return failedCommandResult(command, "unsupported_action")
 	}
+	record := &e.state.Records[index]
+	previousState, previousResult := record.State, cloneCommandResult(record.Result)
 	record.State = "running"
 	record.Result.State = "running"
 	record.Result.Code = "running"
-	e.currentID = command.CommandID
 	if err := e.persist(); err != nil {
-		e.currentID = ""
-		return controlproto.CommandResult{
-			ControlVersion: controlproto.Version, Type: "command_result", CommandID: command.CommandID,
-			Sequence: command.Sequence, State: "failed", Code: "state_write_failed", Data: json.RawMessage(`{}`),
-		}
+		record.State, record.Result = previousState, previousResult
+		e.mu.Unlock()
+		return failedCommandResult(command, "state_write_failed")
 	}
+	e.currentID.Store(command.CommandID)
+	e.mu.Unlock()
 	outcome := callCommandHandler(ctx, handler, command.Payload, command.CommandID)
-	e.currentID = ""
+	e.currentID.Store("")
 	state := "succeeded"
 	if outcome.Failed {
 		state = "failed"
@@ -178,6 +187,8 @@ func (e *CommandExecutor) resume(ctx context.Context, command controlproto.Comma
 	if len(outcome.Data) == 0 {
 		outcome.Data = json.RawMessage(`{}`)
 	}
+	e.mu.Lock()
+	record = &e.state.Records[index]
 	record.State = state
 	record.Result = controlproto.CommandResult{
 		ControlVersion: controlproto.Version, Type: "command_result", CommandID: command.CommandID,
@@ -187,12 +198,13 @@ func (e *CommandExecutor) resume(ctx context.Context, command controlproto.Comma
 		e.state.HighestCompleted = command.Sequence
 	}
 	if err := e.persist(); err != nil {
-		return controlproto.CommandResult{
-			ControlVersion: controlproto.Version, Type: "command_result", CommandID: command.CommandID,
-			Sequence: command.Sequence, State: "failed", Code: "state_write_failed", Data: json.RawMessage(`{}`),
-		}
+		e.mu.Unlock()
+		return failedCommandResult(command, "state_write_failed")
 	}
-	return cloneCommandResult(record.Result)
+	e.completed.Store(e.state.HighestCompleted)
+	result := cloneCommandResult(record.Result)
+	e.mu.Unlock()
+	return result
 }
 
 func callCommandHandler(ctx context.Context, handler CommandHandler, payload json.RawMessage, commandID string) (outcome CommandOutcome) {
@@ -205,15 +217,12 @@ func callCommandHandler(ctx context.Context, handler CommandHandler, payload jso
 }
 
 func (e *CommandExecutor) HighestCompleted() uint64 {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.state.HighestCompleted
+	return e.completed.Load()
 }
 
 func (e *CommandExecutor) CurrentCommandID() string {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.currentID
+	value, _ := e.currentID.Load().(string)
+	return value
 }
 
 func (e *CommandExecutor) load() error {
@@ -275,4 +284,11 @@ func terminalCommandState(state string) bool {
 func cloneCommandResult(result controlproto.CommandResult) controlproto.CommandResult {
 	result.Data = append(json.RawMessage(nil), result.Data...)
 	return result
+}
+
+func failedCommandResult(command controlproto.Command, code string) controlproto.CommandResult {
+	return controlproto.CommandResult{
+		ControlVersion: controlproto.Version, Type: "command_result", CommandID: command.CommandID,
+		Sequence: command.Sequence, State: "failed", Code: code, Data: json.RawMessage(`{}`),
+	}
 }

@@ -2,14 +2,57 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/s2005lg/net-probe/internal/config"
 )
+
+func TestRuntimeActionHandlersUseStrictPayloadsAndStableCodes(t *testing.T) {
+	const secret = "fixture-secret-from-runtime"
+	oldConfig := config.Default()
+	oldConfig.Agent.NodeID = "old-node"
+	r := &Runtime{
+		configPath: filepath.Join(t.TempDir(), "missing-config.toml"),
+		current:    &runtimeSnapshot{cfg: oldConfig},
+	}
+	scheduler := NewScheduler("agent-actions", time.Hour, func(context.Context) error { return errors.New(secret) })
+	r.scheduler = scheduler
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { defer close(done); scheduler.Run(ctx) }()
+
+	collect := r.HandleCollectNow(context.Background(), json.RawMessage(`{}`))
+	if !collect.Failed || collect.Code != "report_not_acknowledged" || string(collect.Data) != `{}` {
+		t.Fatalf("collect=%+v", collect)
+	}
+	if strings.Contains(string(collect.Data), secret) {
+		t.Fatalf("collect leaked error: %s", collect.Data)
+	}
+	reload := r.HandleReloadConfig(context.Background(), json.RawMessage(`{}`))
+	if !reload.Failed || reload.Code != "reload_failed" || string(reload.Data) != `{}` {
+		t.Fatalf("reload=%+v", reload)
+	}
+	if got := r.snapshot().cfg.Agent.NodeID; got != "old-node" {
+		t.Fatalf("active node=%q", got)
+	}
+	for _, action := range []CommandOutcome{
+		r.HandleCollectNow(context.Background(), json.RawMessage(`{"unexpected":true}`)),
+		r.HandleReloadConfig(context.Background(), json.RawMessage(`null`)),
+	} {
+		if !action.Failed || action.Code != "invalid_payload" {
+			t.Fatalf("strict action=%+v", action)
+		}
+	}
+	cancel()
+	<-done
+}
 
 func TestRuntimeReloadPreservesOldSnapshotOnInvalidConfig(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")

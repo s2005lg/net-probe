@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/s2005lg/net-probe/internal/config"
@@ -39,7 +41,9 @@ type Runtime struct {
 	runner     detect.Runner
 	logger     *logx.Logger
 	scheduler  *Scheduler
+	executor   *CommandExecutor
 	collect    collectFunc
+	lastReport atomic.Value
 }
 
 func NewRuntime(configPath string, cfg *config.Config, version string, runner detect.Runner) (*Runtime, error) {
@@ -54,6 +58,7 @@ func NewRuntime(configPath string, cfg *config.Config, version string, runner de
 		return nil, fmt.Errorf("initialize report outbox: %w", err)
 	}
 	runtime := &Runtime{configPath: configPath, version: version, runner: runner, logger: logx.New(cfg.Agent.LogLevel)}
+	runtime.lastReport.Store("")
 	runtime.build = func(candidate *config.Config) (*runtimeSnapshot, error) {
 		return runtime.buildSnapshot(candidate, outbox)
 	}
@@ -63,6 +68,12 @@ func NewRuntime(configPath string, cfg *config.Config, version string, runner de
 		return nil, err
 	}
 	runtime.current = snapshot
+	executor, err := OpenCommandExecutor(StateDir(), snapshot.identity.AgentID, snapshot.identity.CommandKey, runtime.commandHandlers())
+	if err != nil {
+		return nil, fmt.Errorf("initialize command executor: %w", err)
+	}
+	runtime.executor = executor
+	runtime.attachCommandExecutor(snapshot)
 	return runtime, nil
 }
 
@@ -105,7 +116,7 @@ func (r *Runtime) buildSnapshot(cfg *config.Config, outbox *Outbox) (*runtimeSna
 	controlClient, err := NewControlClient(ControlOptions{
 		PanelURL: cfg.Panel.URL, Identity: identity, NodeID: NodeID(cfg), Version: r.version,
 		Capabilities: []controlproto.Action{controlproto.CollectNow, controlproto.ReloadConfig, controlproto.SelfCheck},
-		OutboxDepth:  reporter.OutboxDepth,
+		OutboxDepth:  reporter.OutboxDepth, LastReportCode: r.LastReportCode,
 	})
 	if err != nil {
 		return nil, err
@@ -133,6 +144,14 @@ func (r *Runtime) Reload() error {
 	replacement, err := r.build(candidate)
 	if err != nil {
 		return err
+	}
+	if r.executor != nil {
+		current := r.snapshot()
+		if current == nil || current.identity == nil || replacement.identity == nil ||
+			current.identity.AgentID != replacement.identity.AgentID || !bytes.Equal(current.identity.CommandKey, replacement.identity.CommandKey) {
+			return errors.New("reload cannot replace the enrolled command identity")
+		}
+		r.attachCommandExecutor(replacement)
 	}
 	r.mu.Lock()
 	r.current = replacement
@@ -229,6 +248,64 @@ func (r *Runtime) CollectNow() error {
 	return nil
 }
 
+func (r *Runtime) HandleCollectNow(ctx context.Context, payload json.RawMessage) CommandOutcome {
+	if !exactEmptyObject(payload) {
+		return CommandOutcome{Code: "invalid_payload", Data: json.RawMessage(`{}`), Failed: true}
+	}
+	r.mu.RLock()
+	scheduler := r.scheduler
+	r.mu.RUnlock()
+	if scheduler == nil {
+		return CommandOutcome{Code: "runtime_not_running", Data: json.RawMessage(`{}`), Failed: true}
+	}
+	if err := scheduler.Request(ctx); err != nil {
+		return CommandOutcome{Code: "report_not_acknowledged", Data: json.RawMessage(`{}`), Failed: true}
+	}
+	return CommandOutcome{Code: "report_acknowledged", Data: json.RawMessage(`{}`)}
+}
+
+func (r *Runtime) HandleReloadConfig(_ context.Context, payload json.RawMessage) CommandOutcome {
+	if !exactEmptyObject(payload) {
+		return CommandOutcome{Code: "invalid_payload", Data: json.RawMessage(`{}`), Failed: true}
+	}
+	if err := r.Reload(); err != nil {
+		return CommandOutcome{Code: "reload_failed", Data: json.RawMessage(`{}`), Failed: true}
+	}
+	return CommandOutcome{Code: "reload_applied", Data: json.RawMessage(`{}`)}
+}
+
+func (r *Runtime) HandleSelfCheck(ctx context.Context, payload json.RawMessage) CommandOutcome {
+	return r.selfChecker().Run(ctx, payload)
+}
+
+func (r *Runtime) LastReportCode() string {
+	value, _ := r.lastReport.Load().(string)
+	return value
+}
+
+func (r *Runtime) commandHandlers() map[controlproto.Action]CommandHandler {
+	return map[controlproto.Action]CommandHandler{
+		controlproto.CollectNow: func(ctx context.Context, payload json.RawMessage, _ string) CommandOutcome {
+			return r.HandleCollectNow(ctx, payload)
+		},
+		controlproto.ReloadConfig: func(ctx context.Context, payload json.RawMessage, _ string) CommandOutcome {
+			return r.HandleReloadConfig(ctx, payload)
+		},
+		controlproto.SelfCheck: func(ctx context.Context, payload json.RawMessage, _ string) CommandOutcome {
+			return r.HandleSelfCheck(ctx, payload)
+		},
+	}
+}
+
+func (r *Runtime) attachCommandExecutor(snapshot *runtimeSnapshot) {
+	if snapshot == nil || snapshot.control == nil || r.executor == nil {
+		return
+	}
+	snapshot.control.options.HighestCompleted = r.executor.HighestCompleted
+	snapshot.control.options.CurrentCommandID = r.executor.CurrentCommandID
+	snapshot.control.options.HandleCommand = r.executor.Execute
+}
+
 func (r *Runtime) collectOnce(parent context.Context) error {
 	snapshot := r.snapshot()
 	if snapshot == nil {
@@ -239,18 +316,22 @@ func (r *Runtime) collectOnce(parent context.Context) error {
 	started := time.Now()
 	report, err := build(ctx, snapshot.cfg, r.version, r.runner, r.logger.Debugf)
 	if err != nil {
+		r.lastReport.Store("collect_failed")
 		r.logger.Errorf("build report: %v", err)
 		return err
 	}
 	report.CollectMS = time.Since(started).Milliseconds()
 	body, err := json.Marshal(report)
 	if err != nil {
+		r.lastReport.Store("encode_failed")
 		return err
 	}
-	if err := snapshot.reporter.Send(ctx, body); err != nil {
+	if err := snapshot.reporter.SendRequired(ctx, body, "panel"); err != nil {
+		r.lastReport.Store("panel_not_acknowledged")
 		r.logger.Warnf("report queued for retry")
 		return err
 	}
+	r.lastReport.Store("report_acknowledged")
 	r.logger.Debugf("reported node=%s services=%d collect_ms=%d", report.NodeID, len(report.Services), report.CollectMS)
 	return nil
 }

@@ -8,7 +8,10 @@ import (
 	"github.com/s2005lg/net-probe/internal/sink"
 )
 
-var ErrReportPending = errors.New("one or more report destinations remain pending")
+var (
+	ErrReportPending              = errors.New("one or more report destinations remain pending")
+	ErrRequiredDestinationPending = errors.New("required report destination remains pending")
+)
 
 type Destination struct {
 	ID   string
@@ -44,6 +47,33 @@ func (r *Reporter) Send(ctx context.Context, body []byte) error {
 		return err
 	}
 	return r.Flush(ctx)
+}
+
+func (r *Reporter) SendRequired(ctx context.Context, body []byte, requiredID string) error {
+	if r.destinations[requiredID] == nil {
+		return errors.New("required report destination is not configured")
+	}
+	id, err := r.outbox.Put(body, r.orderedIDs)
+	if err != nil {
+		return err
+	}
+	_ = r.Flush(ctx)
+	items, err := r.outbox.List()
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		if item.ID != id {
+			continue
+		}
+		for _, pending := range item.Pending {
+			if pending == requiredID {
+				return ErrRequiredDestinationPending
+			}
+		}
+		return nil
+	}
+	return nil
 }
 
 func (r *Reporter) Flush(ctx context.Context) error {

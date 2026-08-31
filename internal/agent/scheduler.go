@@ -14,12 +14,14 @@ type collectFunc func(context.Context) error
 // Scheduler serializes collection. Trigger is edge-triggered: any number of
 // requests received during a collection become exactly one follow-up run.
 type Scheduler struct {
-	interval atomic.Int64
-	jitter   time.Duration
-	collect  collectFunc
-	trigger  chan struct{}
-	stop     chan struct{}
-	stopOnce sync.Once
+	interval  atomic.Int64
+	jitter    time.Duration
+	collect   collectFunc
+	trigger   chan struct{}
+	stop      chan struct{}
+	stopOnce  sync.Once
+	waitersMu sync.Mutex
+	waiters   []chan error
 }
 
 func NewScheduler(agentID string, interval time.Duration, collect collectFunc) *Scheduler {
@@ -51,6 +53,26 @@ func (s *Scheduler) Trigger() {
 	}
 }
 
+func (s *Scheduler) Request(ctx context.Context) error {
+	select {
+	case <-s.stop:
+		return context.Canceled
+	default:
+	}
+	response := make(chan error, 1)
+	s.waitersMu.Lock()
+	s.waiters = append(s.waiters, response)
+	s.waitersMu.Unlock()
+	s.Trigger()
+	select {
+	case err := <-response:
+		return err
+	case <-ctx.Done():
+		s.removeWaiter(response)
+		return ctx.Err()
+	}
+}
+
 // Stop prevents new collections and lets an in-flight collection finish.
 func (s *Scheduler) Stop() {
 	if s != nil {
@@ -69,11 +91,16 @@ func (s *Scheduler) Run(ctx context.Context) {
 	if s == nil || s.collect == nil {
 		return
 	}
+	defer s.failWaiters(context.Canceled)
 	pending := true // collect immediately at startup
 	for {
 		if pending {
 			pending = false
-			_ = s.collect(ctx)
+			waiters := s.takeWaiters()
+			err := s.collect(ctx)
+			for _, waiter := range waiters {
+				waiter <- err
+			}
 			if ctx.Err() != nil {
 				return
 			}
@@ -115,6 +142,31 @@ func (s *Scheduler) Run(ctx context.Context) {
 			pending = true
 		case <-timer.C:
 			pending = true
+		}
+	}
+}
+
+func (s *Scheduler) takeWaiters() []chan error {
+	s.waitersMu.Lock()
+	defer s.waitersMu.Unlock()
+	waiters := s.waiters
+	s.waiters = nil
+	return waiters
+}
+
+func (s *Scheduler) failWaiters(err error) {
+	for _, waiter := range s.takeWaiters() {
+		waiter <- err
+	}
+}
+
+func (s *Scheduler) removeWaiter(target chan error) {
+	s.waitersMu.Lock()
+	defer s.waitersMu.Unlock()
+	for index, waiter := range s.waiters {
+		if waiter == target {
+			s.waiters = append(s.waiters[:index], s.waiters[index+1:]...)
+			return
 		}
 	}
 }

@@ -85,3 +85,31 @@ func TestReporterRejectsDuplicateDestinationIDs(t *testing.T) {
 		t.Fatal("accepted duplicate destination IDs")
 	}
 }
+
+func TestReporterRequiredPanelACKIgnoresPendingWebhook(t *testing.T) {
+	q, err := NewOutbox(t.TempDir(), Limits{MaxItems: 120, MaxBytes: 16 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	panel := &switchSink{}
+	webhook := &switchSink{err: errors.New("offline")}
+	r, err := NewReporter(q, []Destination{{ID: "panel", Sink: panel}, {ID: "webhook:0", Sink: webhook}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.SendRequired(context.Background(), []byte(`{"node_id":"n1"}`), "panel"); err != nil {
+		t.Fatalf("Panel was acknowledged: %v", err)
+	}
+	items, err := q.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || len(items[0].Pending) != 1 || items[0].Pending[0] != "webhook:0" {
+		t.Fatalf("items=%+v", items)
+	}
+
+	panel.setError(errors.New("panel offline"))
+	if err := r.SendRequired(context.Background(), []byte(`{"node_id":"n1"}`), "panel"); !errors.Is(err, ErrRequiredDestinationPending) {
+		t.Fatalf("required Panel error=%v", err)
+	}
+}
