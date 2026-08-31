@@ -73,14 +73,16 @@ func createEnrollment(t *testing.T, fixture enrollmentFixture, ttl time.Duration
 		t.Fatalf("create enrollment code=%d body=%s", rr.Code, rr.Body.String())
 	}
 	var out struct {
-		Code          string `json:"code"`
-		CAFingerprint string `json:"ca_fingerprint"`
-		ExpiresAt     int64  `json:"expires_at"`
+		Code                string `json:"code"`
+		CAFingerprint       string `json:"ca_fingerprint"`
+		ReleasePublicKeyHex string `json:"release_public_key_hex"`
+		ExpiresAt           int64  `json:"expires_at"`
 	}
 	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
 		t.Fatal(err)
 	}
-	if out.Code == "" || out.CAFingerprint != fixture.manager.CAFingerprint() || out.ExpiresAt <= time.Now().Unix() {
+	if out.Code == "" || out.CAFingerprint != fixture.manager.CAFingerprint() ||
+		out.ReleasePublicKeyHex != hex.EncodeToString(fixture.releaseKey) || out.ExpiresAt <= time.Now().Unix() {
 		t.Fatalf("create response=%+v", out)
 	}
 	return out.Code

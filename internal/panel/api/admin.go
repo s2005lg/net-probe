@@ -32,6 +32,7 @@ type nodeRow struct {
 	IPRegion        string                `json:"ip_region"`
 	IPCity          string                `json:"ip_city"`
 	IPGeoUpdatedAt  int64                 `json:"ip_geo_updated_at"`
+	AgentID         string                `json:"agent_id"`
 	ControlStatus   string                `json:"control_status"`
 	LastHeartbeatAt int64                 `json:"last_heartbeat_at"`
 	AgentVersion    string                `json:"agent_version"`
@@ -48,7 +49,7 @@ type nodeListResponse struct {
 	PageSize int       `json:"page_size"`
 }
 
-const nodeSelect = `SELECT n.node_id, COALESCE(n.alias,''), COALESCE(n.muted_until,0), COALESCE(n.last_report_at,0), COALESCE(n.last_host_json,'{}'), COALESCE(n.last_services_json,'[]'), COALESCE(n.ip_location,''), COALESCE(n.ip_country,''), COALESCE(n.ip_region,''), COALESCE(n.ip_city,''), COALESCE(n.ip_geo_updated_at,0), COALESCE(ai.last_heartbeat_at,0), COALESCE(ai.agent_version,''), COALESCE(ai.os,''), COALESCE(ai.arch,''), COALESCE(ai.expires_at,0), COALESCE(ai.capabilities_json,'[]') FROM nodes n LEFT JOIN agent_identities ai ON ai.node_id=n.node_id AND ai.revoked_at=0`
+const nodeSelect = `SELECT n.node_id, COALESCE(n.alias,''), COALESCE(n.muted_until,0), COALESCE(n.last_report_at,0), COALESCE(n.last_host_json,'{}'), COALESCE(n.last_services_json,'[]'), COALESCE(n.ip_location,''), COALESCE(n.ip_country,''), COALESCE(n.ip_region,''), COALESCE(n.ip_city,''), COALESCE(n.ip_geo_updated_at,0), COALESCE(ai.agent_id,''), COALESCE(ai.last_heartbeat_at,0), COALESCE(ai.agent_version,''), COALESCE(ai.os,''), COALESCE(ai.arch,''), COALESCE(ai.expires_at,0), COALESCE(ai.capabilities_json,'[]') FROM nodes n LEFT JOIN agent_identities ai ON ai.node_id=n.node_id AND ai.revoked_at=0`
 
 type metricRow struct {
 	TS          int64           `json:"ts"`
@@ -65,7 +66,7 @@ func scanNode(scanner interface{ Scan(...any) error }) (nodeRow, error) {
 	var n nodeRow
 	var host, services, capabilities string
 	err := scanner.Scan(&n.NodeID, &n.Alias, &n.MutedUntil, &n.LastReportAt, &host, &services, &n.IPLocation, &n.IPCountry, &n.IPRegion, &n.IPCity, &n.IPGeoUpdatedAt,
-		&n.LastHeartbeatAt, &n.AgentVersion, &n.AgentOS, &n.AgentArch, &n.CertExpiresAt, &capabilities)
+		&n.AgentID, &n.LastHeartbeatAt, &n.AgentVersion, &n.AgentOS, &n.AgentArch, &n.CertExpiresAt, &capabilities)
 	n.Host = json.RawMessage(host)
 	n.Services = json.RawMessage(services)
 	n.Capabilities = make([]controlproto.Action, 0)

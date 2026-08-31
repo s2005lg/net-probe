@@ -98,7 +98,12 @@ func (s *Server) handleCA(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleCreateEnrollment(w http.ResponseWriter, r *http.Request) {
-	if s.pkiManager == nil {
+	if s.pkiManager == nil || s.releaseKey == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": map[string]any{"code": "unavailable"}})
+		return
+	}
+	releasePublicKey, err := s.releaseKey.ReleasePublicKey()
+	if err != nil || len(releasePublicKey) != ed25519.PublicKeySize {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": map[string]any{"code": "unavailable"}})
 		return
 	}
@@ -136,9 +141,10 @@ func (s *Server) handleCreateEnrollment(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"code":           code,
-		"expires_at":     expiresAt,
-		"ca_fingerprint": s.pkiManager.CAFingerprint(),
+		"code":                   code,
+		"expires_at":             expiresAt,
+		"ca_fingerprint":         s.pkiManager.CAFingerprint(),
+		"release_public_key_hex": hex.EncodeToString(releasePublicKey),
 	})
 }
 

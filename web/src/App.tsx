@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import Layout from "./components/Layout";
 
 const Alerts = lazy(() => import("./pages/Alerts"));
+const Agents = lazy(() => import("./pages/Agents"));
 const Login = lazy(() => import("./pages/Login"));
 const NodeDetail = lazy(() => import("./pages/NodeDetail"));
 const Nodes = lazy(() => import("./pages/Nodes"));
@@ -20,6 +21,7 @@ export default function App() {
             <Route path="/overview" element={<Overview />} />
             <Route path="/nodes" element={<Nodes />} />
             <Route path="/nodes/:id" element={<NodeDetail />} />
+            <Route path="/agents" element={<Agents />} />
             <Route path="/alerts" element={<Alerts />} />
             <Route path="/versions" element={<Versions />} />
             <Route path="/settings" element={<Settings />} />

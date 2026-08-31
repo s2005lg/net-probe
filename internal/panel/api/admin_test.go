@@ -64,7 +64,7 @@ func TestNodeDetailSeparatesReportAndControlPresence(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
 		t.Fatal(err)
 	}
-	if out["status"] != "offline" || out["control_status"] != "online" || out["agent_version"] != "v1.2.3" || out["agent_os"] != "linux" {
+	if out["status"] != "offline" || out["control_status"] != "online" || out["agent_id"] != authAgentID || out["agent_version"] != "v1.2.3" || out["agent_os"] != "linux" {
 		t.Fatalf("presence=%+v", out)
 	}
 	capabilities, ok := out["agent_capabilities"].([]any)

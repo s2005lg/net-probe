@@ -113,6 +113,95 @@ export interface Service {
 }
 
 export type NodeStatus = "online" | "offline";
+export type ControlStatus = "online" | "offline";
+export type Role = "viewer" | "operator" | "admin";
+export type AgentAction = "collect_now" | "reload_config" | "self_check" | "upgrade";
+export type CommandState =
+  | "queued"
+  | "dispatched"
+  | "accepted"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "expired";
+
+export interface SessionUser {
+  id: number;
+  username: string;
+  role: Role;
+  reauthenticated_at: number;
+}
+
+export interface AgentIdentity {
+  agent_id: string;
+  node_id: string;
+  display_name: string;
+  control_status: ControlStatus;
+  last_heartbeat_at: number;
+  agent_version: string;
+  os: string;
+  arch: string;
+  certificate_expires_at: number;
+  capabilities: AgentAction[];
+}
+
+export interface CommandEnvelope {
+  control_version: "1";
+  type: "command";
+  command_id: string;
+  sequence: number;
+  agent_id: string;
+  action: AgentAction;
+  issued_at: number;
+  expires_at: number;
+  payload: Record<string, unknown>;
+  signature: string;
+}
+
+export interface AgentCommand {
+  command: CommandEnvelope;
+  state: CommandState;
+  dispatched_at: number;
+  accepted_at: number;
+  started_at: number;
+  finished_at: number;
+  attempt_count: number;
+  result_code: string;
+  result: Record<string, unknown>;
+}
+
+export interface Enrollment {
+  code: string;
+  expires_at: number;
+  ca_fingerprint: string;
+  release_public_key_hex: string;
+}
+
+export interface ReleaseManifest {
+  version: string;
+  os: string;
+  arch: string;
+  byte_size: number;
+  sha256: string;
+  artifact_url: string;
+  minimum_panel_version: string;
+  control_version: "1";
+  issued_at: number;
+  expires_at: number;
+}
+
+export interface Release {
+  id: number;
+  manifest: ReleaseManifest;
+  signature: string;
+  imported_at: number;
+}
+
+export interface ReleaseImportResponse {
+  id: number;
+  manifest: ReleaseManifest;
+  signature: string;
+}
 
 export interface Node {
   node_id: string;
@@ -125,6 +214,14 @@ export interface Node {
   services: Service[];
   effective_ip?: string;
   ip_location?: string;
+  agent_id: string;
+  control_status: ControlStatus;
+  last_heartbeat_at: number;
+  agent_version: string;
+  agent_os: string;
+  agent_arch: string;
+  certificate_expires_at: number;
+  agent_capabilities: AgentAction[];
 }
 
 export interface NodesResponse {
@@ -142,6 +239,22 @@ export interface Tag {
 
 export function nodeName(node: Node): string {
   return node.alias || node.host.hostname || node.node_id;
+}
+
+export function agentFromNode(node: Node): AgentIdentity | null {
+  if (!node.agent_id) return null;
+  return {
+    agent_id: node.agent_id,
+    node_id: node.node_id,
+    display_name: nodeName(node),
+    control_status: node.control_status,
+    last_heartbeat_at: node.last_heartbeat_at,
+    agent_version: node.agent_version,
+    os: node.agent_os,
+    arch: node.agent_arch,
+    certificate_expires_at: node.certificate_expires_at,
+    capabilities: node.agent_capabilities,
+  };
 }
 
 export interface ServiceDist {
@@ -227,6 +340,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new Error(message);
   }
+  if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
 
@@ -237,6 +351,12 @@ export const api = {
       body: JSON.stringify({ username, password }),
     }),
   logout: () => request<{ ok: boolean }>("/logout", { method: "POST" }),
+  me: () => request<SessionUser>("/me"),
+  reauthenticate: (password: string) =>
+    request<{ ok: boolean }>("/reauth", {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    }),
   overview: () => request<Overview>("/overview"),
   nodes: (params: { q?: string; status?: string; tag?: string; page?: number; page_size?: number } = {}) => {
     const query = new URLSearchParams();
@@ -249,6 +369,44 @@ export const api = {
     return request<NodesResponse>(`/nodes${qs ? `?${qs}` : ""}`);
   },
   node: (id: string) => request<Node>(`/nodes/${encodeURIComponent(id)}`),
+  allNodes: async () => {
+    const first = await api.nodes({ page: 1, page_size: 100 });
+    const pages = Math.ceil(first.total / first.page_size);
+    if (pages <= 1) return first.items;
+    const rest = await Promise.all(
+      Array.from({ length: pages - 1 }, (_, index) =>
+        api.nodes({ page: index + 2, page_size: 100 }),
+      ),
+    );
+    return [first, ...rest].flatMap((page) => page.items);
+  },
+  commandHistory: (agentID: string) =>
+    request<{ items: AgentCommand[] }>(`/agents/${encodeURIComponent(agentID)}/commands`),
+  createCommand: (agentID: string, action: Exclude<AgentAction, "upgrade">, payload: Record<string, unknown>) =>
+    request<{ command: CommandEnvelope; state: CommandState }>(
+      `/agents/${encodeURIComponent(agentID)}/commands`,
+      { method: "POST", body: JSON.stringify({ action, payload }) },
+    ),
+  createEnrollment: (label: string) =>
+    request<Enrollment>("/enrollments", {
+      method: "POST",
+      body: JSON.stringify({ label, expires_in_seconds: 600 }),
+    }),
+  revokeAgent: (agentID: string) =>
+    request<void>(`/agents/${encodeURIComponent(agentID)}/revoke`, { method: "POST" }),
+  releases: () => request<{ items: Release[] }>("/releases"),
+  importRelease: (manifest: ReleaseManifest, signature: string) =>
+    request<ReleaseImportResponse>("/releases", {
+      method: "POST",
+      body: JSON.stringify({ manifest, signature }),
+    }),
+  createUpgrades: (input: {
+    version: string;
+    os: string;
+    arch: string;
+    agent_ids: string[];
+    confirmed: true;
+  }) => request<{ commands: CommandEnvelope[] }>("/upgrades", { method: "POST", body: JSON.stringify(input) }),
   patchNode: (
     id: string,
     body: { alias?: string; muted_until?: number; tags?: string[] },
