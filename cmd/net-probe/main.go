@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/s2005lg/net-probe/internal/agent"
 	"github.com/s2005lg/net-probe/internal/config"
@@ -95,13 +96,14 @@ type reloadableResident interface {
 }
 
 type cliDependencies struct {
-	runOnce     func(context.Context, *config.Config, string, detect.Runner) int
-	newResident func(string, *config.Config, string, detect.Runner) (residentRunner, error)
+	runOnce      func(context.Context, *config.Config, string, detect.Runner) int
+	runPreflight func(context.Context, *config.Config, string, detect.Runner) error
+	newResident  func(string, *config.Config, string, detect.Runner) (residentRunner, error)
 }
 
 func runCLI(args []string, stdin io.Reader, stdout, stderr io.Writer, enroll enrollFunc) int {
 	return runCLIWithDependencies(args, stdin, stdout, stderr, enroll, cliDependencies{
-		runOnce: agent.Run,
+		runOnce: agent.Run, runPreflight: agent.Preflight,
 		newResident: func(path string, cfg *config.Config, version string, runner detect.Runner) (residentRunner, error) {
 			return agent.NewRuntime(path, cfg, version, runner)
 		},
@@ -117,11 +119,21 @@ func runCLIWithDependencies(args []string, stdin io.Reader, stdout, stderr io.Wr
 	cfgPath := flags.String("config", "", "config file path")
 	check := flags.Bool("check", false, "validate config and print report preview")
 	once := flags.Bool("once", false, "collect and deliver one report, then exit")
+	preflight := flags.Bool("preflight", false, "validate report and control-v1 readiness, then exit")
 	ver := flags.Bool("version", false, "print version")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
-	_ = once
+	selectedModes := 0
+	for _, selected := range []bool{*check, *once, *preflight} {
+		if selected {
+			selectedModes++
+		}
+	}
+	if selectedModes > 1 {
+		fmt.Fprintln(stderr, "check, once, and preflight modes are mutually exclusive")
+		return 2
+	}
 
 	if *ver {
 		fmt.Fprintln(stdout, version)
@@ -163,6 +175,20 @@ func runCLIWithDependencies(args []string, stdin io.Reader, stdout, stderr io.Wr
 
 	if *once {
 		return deps.runOnce(context.Background(), cfg, version, runner)
+	}
+	if *preflight {
+		if deps.runPreflight == nil {
+			fmt.Fprintln(stderr, "preflight is unavailable")
+			return 2
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if err := deps.runPreflight(ctx, cfg, version, runner); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		fmt.Fprintln(stdout, "preflight ok")
+		return 0
 	}
 	runtime, err := deps.newResident(path, cfg, version, runner)
 	if err != nil {

@@ -64,6 +64,33 @@ func TestControlClientConnectsWithMTLSAndSendsHeartbeat(t *testing.T) {
 	}
 }
 
+func TestControlClientProbeCompletesAfterAuthenticatedWelcome(t *testing.T) {
+	panel := startEnrollmentPanel(t)
+	identity, err := Enroll(context.Background(), insecureBootstrapClient(), EnrollmentOptions{
+		PanelURL: panel.URL, CAFingerprint: panel.Fingerprint, Code: panel.Code,
+		PKIDir: t.TempDir(), NodeID: "node-control-probe", Version: "v1.2.3",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewControlClient(ControlOptions{
+		PanelURL: panel.URL, Identity: identity, NodeID: "node-control-probe", Version: "v1.2.3",
+		Capabilities: []controlproto.Action{controlproto.CollectNow},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := client.Probe(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var connectedAt int64
+	if err := panel.DB.QueryRow(`SELECT last_connected_at FROM agent_identities WHERE agent_id=?`, identity.AgentID).Scan(&connectedAt); err != nil || connectedAt == 0 {
+		t.Fatalf("connected_at=%d err=%v", connectedAt, err)
+	}
+}
+
 func TestCommandWorkerQueuesWithoutBlockingAndExecutesSerially(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

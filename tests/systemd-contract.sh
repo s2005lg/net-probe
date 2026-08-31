@@ -15,6 +15,7 @@ for unit_source in systemd/net-probe.service install.sh; do
   contains "$unit_source" "RuntimeDirectory=net-probe"
   contains "$unit_source" "Restart=on-failure"
   contains "$unit_source" "WatchdogSec="
+  contains "$unit_source" "TimeoutStopSec=30s"
   contains "$unit_source" "NET_PROBE_UPDATE_DIRECTORY=/var/lib/net-probe-updates"
   contains "$unit_source" "ReadWritePaths=/etc/net-probe/pki /var/lib/net-probe-updates"
 done
@@ -25,6 +26,7 @@ contains install.sh "enable --now net-probe-update.path"
 contains install.sh "install -d -o root -g net-probe -m 0770 /var/lib/net-probe-updates"
 contains install.sh 'openssl pkeyutl -verify'
 contains install.sh 'NET_PROBE_RELEASE_PUBLIC_KEY_HEX'
+contains install.sh '"$download_path" --config "$stage_agent_dir/config.toml" --preflight'
 not_contains install.sh '$download_path --version'
 contains install.sh 'ln -sfn "$version_dir/net-probe" /usr/local/bin/net-probe'
 not_contains install.sh "enable --now net-probe.timer"

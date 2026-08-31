@@ -98,6 +98,29 @@ NET_PROBE_PANEL_ADMIN_PASSWORD=test-admin-password \
 NET_PROBE_PANEL_PUBLIC_URL=https://panel.example.test:24443 \
   bash "$repo_dir/install-panel.sh" > "$test_dir/panel-install.out"
 
+# A failed migration may download and stage, but must not modify production
+# paths or disable the old timer before enrollment/report/control preflight.
+mkdir -p /etc/net-probe /etc/systemd/system
+rm -f /usr/local/bin/net-probe
+printf 'old-agent-binary\n' > /usr/local/bin/net-probe
+chmod 0755 /usr/local/bin/net-probe
+printf 'old-agent-config\n' > /etc/net-probe/config.toml
+printf 'old-agent-timer\n' > /etc/systemd/system/net-probe.timer
+old_binary_sha="$(sha256sum /usr/local/bin/net-probe | awk '{print $1}')"
+old_config_sha="$(sha256sum /etc/net-probe/config.toml | awk '{print $1}')"
+old_timer_sha="$(sha256sum /etc/systemd/system/net-probe.timer | awk '{print $1}')"
+if NET_PROBE_VERSION=v0.1.0 \
+   NET_PROBE_RELEASE_PUBLIC_KEY_HEX=0000000000000000000000000000000000000000000000000000000000000000 \
+   NET_PROBE_PANEL_URL=https://panel.example.test:24443 \
+   NET_PROBE_CA_FINGERPRINT=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+     bash "$repo_dir/install.sh" > "$test_dir/agent-failed-install.out" 2>&1; then
+  fail "Agent install without enrollment code unexpectedly succeeded"
+fi
+[ "$(sha256sum /usr/local/bin/net-probe | awk '{print $1}')" = "$old_binary_sha" ] || fail "failed preflight changed old Agent binary"
+[ "$(sha256sum /etc/net-probe/config.toml | awk '{print $1}')" = "$old_config_sha" ] || fail "failed preflight changed old Agent config"
+[ "$(sha256sum /etc/systemd/system/net-probe.timer | awk '{print $1}')" = "$old_timer_sha" ] || fail "failed preflight changed old Agent timer"
+! grep -Fq 'disable --now net-probe.timer' "$systemctl_log" || fail "failed preflight disabled old timer"
+
 NET_PROBE_VERSION=v0.1.0 \
 NET_PROBE_RELEASE_PUBLIC_KEY_HEX=0000000000000000000000000000000000000000000000000000000000000000 \
 NET_PROBE_PANEL_URL=https://panel.example.test:24443 \
@@ -119,6 +142,7 @@ contains "$systemctl_log" 'enable --now net-probe-panel.service'
 contains "$systemctl_log" 'enable --now net-probe.service'
 contains "$systemctl_log" 'enable --now net-probe-update.path'
 contains "$systemctl_log" 'is-active --quiet net-probe.service'
+contains "$repo_dir/install.sh" '"$download_path" --config "$stage_agent_dir/config.toml" --preflight'
 contains "$curl_log" "https://github.com/s2005lg/net-probe/releases/download/v0.1.0/net-probe-panel_linux_${test_arch} -> /usr/local/bin/net-probe-panel"
 contains "$curl_log" "https://github.com/s2005lg/net-probe/releases/download/v0.1.0/net-probe_linux_${test_arch}.manifest.json"
 contains "$curl_log" "https://github.com/s2005lg/net-probe/releases/download/v0.1.0/net-probe_linux_${test_arch}.manifest.sig"

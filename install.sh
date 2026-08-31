@@ -160,7 +160,7 @@ chmod 0600 "$stage_agent_dir/config.toml"
 printf '%s\n' "$enrollment_code" | runuser -u net-probe -- env XDG_CONFIG_HOME="$stage_config_home" XDG_STATE_HOME="$stage_state_home" \
   "$download_path" enroll --panel-url "$panel_url" --ca-fingerprint "$ca_fingerprint" --code-stdin >/dev/null
 runuser -u net-probe -- env XDG_CONFIG_HOME="$stage_config_home" XDG_STATE_HOME="$stage_state_home" \
-  "$download_path" --config "$stage_agent_dir/config.toml" --once >/dev/null
+  "$download_path" --config "$stage_agent_dir/config.toml" --preflight >/dev/null
 
 version_dir="/opt/net-probe/versions/${resolved_version}"
 install -d -o root -g root -m 0755 /opt/net-probe/versions "$version_dir"
@@ -192,6 +192,7 @@ Restart=on-failure
 RestartSec=5s
 WatchdogSec=90s
 TimeoutStartSec=30s
+TimeoutStopSec=30s
 StateDirectory=net-probe
 StateDirectoryMode=0700
 RuntimeDirectory=net-probe

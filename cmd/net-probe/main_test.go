@@ -121,6 +121,42 @@ func TestCLIUsesResidentModeByDefaultAndOnceOnlyWhenRequested(t *testing.T) {
 	}
 }
 
+func TestCLIPreflightValidatesReportAndControlWithoutStartingResident(t *testing.T) {
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+	configDir := filepath.Join(configHome, "net-probe")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(configDir, "config.toml")
+	writeCLIConfig(t, configPath)
+	resident := &fakeResident{}
+	preflightCalls := 0
+	onceCalls := 0
+	deps := cliDependencies{
+		runOnce: func(context.Context, *config.Config, string, detect.Runner) int {
+			onceCalls++
+			return 0
+		},
+		runPreflight: func(context.Context, *config.Config, string, detect.Runner) error {
+			preflightCalls++
+			return nil
+		},
+		newResident: func(string, *config.Config, string, detect.Runner) (residentRunner, error) {
+			return resident, nil
+		},
+	}
+	if rc := runCLIWithDependencies([]string{"--preflight"}, strings.NewReader(""), io.Discard, io.Discard, nil, deps); rc != 0 {
+		t.Fatalf("preflight rc=%d", rc)
+	}
+	if preflightCalls != 1 || onceCalls != 0 || resident.ran {
+		t.Fatalf("preflight=%d once=%d resident=%v", preflightCalls, onceCalls, resident.ran)
+	}
+	if rc := runCLIWithDependencies([]string{"--preflight", "--once"}, strings.NewReader(""), io.Discard, io.Discard, nil, deps); rc == 0 {
+		t.Fatal("combined preflight and once was accepted")
+	}
+}
+
 func writeCLIConfig(t *testing.T, path string) {
 	t.Helper()
 	body := `[agent]

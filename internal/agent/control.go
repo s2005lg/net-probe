@@ -75,7 +75,7 @@ func (c *ControlClient) Run(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return nil
 		}
-		err := c.runSession(ctx)
+		err := c.runSession(ctx, nil)
 		if ctx.Err() != nil {
 			return nil
 		}
@@ -100,7 +100,30 @@ func (c *ControlClient) Run(ctx context.Context) error {
 	}
 }
 
-func (c *ControlClient) runSession(ctx context.Context) error {
+// Probe performs one authenticated hello/welcome exchange and then closes the
+// session. Installers use it to prove control-v1 compatibility before replacing
+// an existing Agent deployment.
+func (c *ControlClient) Probe(ctx context.Context) error {
+	probeContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	ready := false
+	err := c.runSession(probeContext, func() {
+		ready = true
+		cancel()
+	})
+	if ready {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err == nil {
+		return errors.New("control probe ended before welcome")
+	}
+	return err
+}
+
+func (c *ControlClient) runSession(ctx context.Context, ready func()) error {
 	httpClient := &http.Client{
 		Timeout:   20 * time.Second,
 		Transport: &http.Transport{TLSClientConfig: c.options.Identity.TLSConfig.Clone()},
@@ -143,6 +166,9 @@ func (c *ControlClient) runSession(ctx context.Context) error {
 	}
 	if c.options.OnWelcome != nil {
 		c.options.OnWelcome(welcome)
+	}
+	if ready != nil {
+		ready()
 	}
 	heartbeatInterval := time.Duration(welcome.HeartbeatSeconds) * time.Second
 	if c.heartbeatOverride > 0 {
