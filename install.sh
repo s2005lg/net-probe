@@ -34,28 +34,38 @@ done
 openssl version | grep -Eq '^OpenSSL (3|[4-9])\.' || { echo "OpenSSL 3.0 or newer is required for Ed25519 verification" >&2; exit 1; }
 staging_dir="$(mktemp -d /tmp/net-probe-install.XXXXXX)"
 trap 'rm -rf "$staging_dir"' EXIT
-manifest_path="$staging_dir/manifest.json"
-signature_text_path="$staging_dir/manifest.sig.b64"
-signature_path="$staging_dir/manifest.sig"
 public_key_path="$staging_dir/release-public.der"
 download_path="$staging_dir/net-probe"
-curl --proto '=https' --proto-redir '=https' -fLsS "${base}/net-probe_linux_${arch}.manifest.json" -o "$manifest_path"
-curl --proto '=https' --proto-redir '=https' -fLsS "${base}/net-probe_linux_${arch}.manifest.sig" -o "$signature_text_path"
-python3 - "$release_public_key_hex" "$public_key_path" "$manifest_path" <<'PY'
+helper_download_path="$staging_dir/net-probe-update-helper"
+python3 - "$release_public_key_hex" "$public_key_path" <<'PY'
 import pathlib, sys
 key = bytes.fromhex(sys.argv[1])
 if len(key) != 32:
     raise SystemExit("invalid release public key")
 pathlib.Path(sys.argv[2]).write_bytes(bytes.fromhex("302a300506032b6570032100") + key)
-manifest_path = pathlib.Path(sys.argv[3])
-manifest = manifest_path.read_bytes()
-if not manifest.endswith(b"\n") or manifest[:-1].strip() != manifest[:-1]:
-    raise SystemExit("release manifest encoding is invalid")
-manifest_path.write_bytes(manifest[:-1])
 PY
-base64 --decode < "$signature_text_path" > "$signature_path"
-openssl pkeyutl -verify -pubin -inkey "$public_key_path" -keyform DER -rawin -in "$manifest_path" -sigfile "$signature_path" >/dev/null
-mapfile -t manifest_fields < <(python3 - "$manifest_path" "$arch" <<'PY'
+
+verify_release_artifact() {
+  local asset="$1"
+  local output="$2"
+  local max_size="$3"
+  local manifest_path="$staging_dir/${asset}.manifest.json"
+  local signature_text_path="$staging_dir/${asset}.manifest.sig.b64"
+  local signature_path="$staging_dir/${asset}.manifest.sig"
+  local manifest_fields=()
+  curl --proto '=https' --proto-redir '=https' -fLsS "${base}/${asset}.manifest.json" -o "$manifest_path"
+  curl --proto '=https' --proto-redir '=https' -fLsS "${base}/${asset}.manifest.sig" -o "$signature_text_path"
+  python3 - "$manifest_path" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+body = path.read_bytes()
+if not body.endswith(b"\n") or body[:-1].strip() != body[:-1]:
+    raise SystemExit("release manifest encoding is invalid")
+path.write_bytes(body[:-1])
+PY
+  base64 --decode < "$signature_text_path" > "$signature_path"
+  openssl pkeyutl -verify -pubin -inkey "$public_key_path" -keyform DER -rawin -in "$manifest_path" -sigfile "$signature_path" >/dev/null
+  mapfile -t manifest_fields < <(python3 - "$manifest_path" "$arch" "$asset" "$max_size" <<'PY'
 import json, pathlib, re, sys, time, urllib.parse
 raw = pathlib.Path(sys.argv[1]).read_bytes()
 manifest = json.loads(raw)
@@ -64,7 +74,7 @@ if set(manifest) != expected or manifest["os"] != "linux" or manifest["arch"] !=
     raise SystemExit("release manifest platform/schema mismatch")
 if not re.fullmatch(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", manifest["version"]):
     raise SystemExit("release manifest version is invalid")
-if not isinstance(manifest["byte_size"], int) or not 0 < manifest["byte_size"] <= 32 * 1024 * 1024:
+if not isinstance(manifest["byte_size"], int) or not 0 < manifest["byte_size"] <= int(sys.argv[4]):
     raise SystemExit("release manifest size is invalid")
 if not re.fullmatch(r"[0-9a-f]{64}", manifest["sha256"]):
     raise SystemExit("release manifest hash is invalid")
@@ -75,7 +85,7 @@ if manifest["expires_at"] <= manifest["issued_at"] or manifest["expires_at"] - m
 if manifest["issued_at"] > int(time.time()) + 5 * 60:
     raise SystemExit("release manifest was issued in the future")
 url = urllib.parse.urlsplit(manifest["artifact_url"])
-expected_path = f"/s2005lg/net-probe/releases/download/{manifest['version']}/net-probe_linux_{manifest['arch']}"
+expected_path = f"/s2005lg/net-probe/releases/download/{manifest['version']}/{sys.argv[3]}"
 if url.scheme != "https" or url.netloc != "github.com" or url.path != expected_path or url.query or url.fragment:
     raise SystemExit("release artifact URL is invalid")
 print(manifest["version"])
@@ -83,20 +93,18 @@ print(manifest["byte_size"])
 print(manifest["sha256"])
 print(manifest["artifact_url"])
 PY
-)
-[ "${#manifest_fields[@]}" -eq 4 ] || { echo "release manifest validation failed" >&2; exit 1; }
-resolved_version="${manifest_fields[0]}"
-expected_size="${manifest_fields[1]}"
-expected_sha256="${manifest_fields[2]}"
-artifact_url="${manifest_fields[3]}"
-if [ "$resolved_version" != "$version" ]; then
-  echo "release manifest version does not match requested version" >&2
-  exit 1
-fi
-curl --proto '=https' --proto-redir '=https' -fLsS "$artifact_url" -o "$download_path"
-[ "$(stat -c '%s' "$download_path")" = "$expected_size" ] || { echo "Agent artifact size verification failed" >&2; exit 1; }
-printf '%s  %s\n' "$expected_sha256" "$download_path" | sha256sum --check --status || { echo "Agent artifact SHA-256 verification failed" >&2; exit 1; }
-chmod 0755 "$download_path"
+  )
+  [ "${#manifest_fields[@]}" -eq 4 ] || { echo "$asset manifest validation failed" >&2; exit 1; }
+  [ "${manifest_fields[0]}" = "$version" ] || { echo "$asset manifest version mismatch" >&2; exit 1; }
+  curl --proto '=https' --proto-redir '=https' -fLsS "${manifest_fields[3]}" -o "$output"
+  [ "$(stat -c '%s' "$output")" = "${manifest_fields[1]}" ] || { echo "$asset size verification failed" >&2; exit 1; }
+  printf '%s  %s\n' "${manifest_fields[2]}" "$output" | sha256sum --check --status || { echo "$asset SHA-256 verification failed" >&2; exit 1; }
+  chmod 0755 "$output"
+}
+
+verify_release_artifact "net-probe_linux_${arch}" "$download_path" "$((32 * 1024 * 1024))"
+verify_release_artifact "net-probe-update-helper_linux_${arch}" "$helper_download_path" "$((32 * 1024 * 1024))"
+resolved_version="$version"
 if ! id net-probe >/dev/null 2>&1; then
   useradd --system --no-create-home --shell /usr/sbin/nologin net-probe
 fi
@@ -165,6 +173,8 @@ runuser -u net-probe -- env XDG_CONFIG_HOME="$stage_config_home" XDG_STATE_HOME=
 version_dir="/opt/net-probe/versions/${resolved_version}"
 install -d -o root -g root -m 0755 /opt/net-probe/versions "$version_dir"
 install -o root -g root -m 0755 "$download_path" "$version_dir/net-probe"
+install -d -o root -g root -m 0755 /usr/local/libexec
+install -o root -g root -m 0755 "$helper_download_path" /usr/local/libexec/net-probe-update-helper
 install -d -o root -g root -m 0755 /etc/net-probe /etc/net-probe/services.d /etc/net-probe/trust
 install -d -o net-probe -g net-probe -m 0700 /etc/net-probe/pki
 for identity_file in agent.key agent.crt ca.crt command-signing.pub release-signing.pub identity.json; do
@@ -231,7 +241,7 @@ After=net-probe.service
 Type=oneshot
 User=root
 Group=root
-ExecStart=/usr/local/bin/net-probe internal-update-helper
+ExecStart=/usr/local/libexec/net-probe-update-helper
 UMask=0077
 NoNewPrivileges=yes
 PrivateTmp=yes

@@ -49,6 +49,9 @@ if [ "${1:-}" = "enroll" ]; then
 fi
 exit 0
 '
+helper_body='#!/usr/bin/env bash
+exit 0
+'
 case "$url" in
   "https://github.com/s2005lg/net-probe/releases/download/v0.1.0/net-probe-panel_linux_${NET_PROBE_TEST_ARCH}")
     printf '#!/usr/bin/env bash\nexit 0\n' > "$output"
@@ -67,9 +70,20 @@ case "$url" in
   "https://github.com/s2005lg/net-probe/releases/download/v0.1.0/net-probe_linux_${NET_PROBE_TEST_ARCH}")
     printf '%s' "$agent_body" > "$output"
     ;;
+  "https://github.com/s2005lg/net-probe/releases/download/v0.1.0/net-probe-update-helper_linux_${NET_PROBE_TEST_ARCH}.manifest.json")
+    size="$(printf '%s' "$helper_body" | wc -c | tr -d ' ')"
+    digest="$(printf '%s' "$helper_body" | sha256sum | awk '{print $1}')"
+    printf '{"version":"v0.1.0","os":"linux","arch":"%s","byte_size":%s,"sha256":"%s","artifact_url":"https://github.com/s2005lg/net-probe/releases/download/v0.1.0/net-probe-update-helper_linux_%s","minimum_panel_version":"v0.1.0","control_version":"1","issued_at":1,"expires_at":2}\n' "$NET_PROBE_TEST_ARCH" "$size" "$digest" "$NET_PROBE_TEST_ARCH" > "$output"
+    ;;
+  "https://github.com/s2005lg/net-probe/releases/download/v0.1.0/net-probe-update-helper_linux_${NET_PROBE_TEST_ARCH}.manifest.sig")
+    head -c 64 /dev/zero | base64 > "$output"
+    ;;
+  "https://github.com/s2005lg/net-probe/releases/download/v0.1.0/net-probe-update-helper_linux_${NET_PROBE_TEST_ARCH}")
+    printf '%s' "$helper_body" > "$output"
+    ;;
   *) echo "unexpected curl call: $url -> $output" >&2; exit 1 ;;
 esac
-if [[ "$url" == *net-probe_linux_* && "$url" != *.json && "$url" != *.sig ]]; then
+if [[ "$url" == *net-probe*_linux_* && "$url" != *.json && "$url" != *.sig ]]; then
   chmod +x "$output"
 fi
 EOF
@@ -130,6 +144,7 @@ NET_PROBE_ENROLLMENT_CODE=test-one-use-enrollment-code \
 
 [ -x /usr/local/bin/net-probe-panel ] || fail "panel binary is not executable"
 [ -x /usr/local/bin/net-probe ] || fail "agent binary is not executable"
+[ -x /usr/local/libexec/net-probe-update-helper ] || fail "update helper is not executable"
 contains /etc/net-probe-panel/config.toml 'listen_addr = ":24443"'
 contains /etc/net-probe-panel/config.toml 'public_url = "https://panel.example.test:24443"'
 ! grep -Fq 'token =' /etc/net-probe-panel/config.toml || fail "legacy Panel Agent token remains"
@@ -147,8 +162,13 @@ contains "$curl_log" "https://github.com/s2005lg/net-probe/releases/download/v0.
 contains "$curl_log" "https://github.com/s2005lg/net-probe/releases/download/v0.1.0/net-probe_linux_${test_arch}.manifest.json"
 contains "$curl_log" "https://github.com/s2005lg/net-probe/releases/download/v0.1.0/net-probe_linux_${test_arch}.manifest.sig"
 contains "$curl_log" "https://github.com/s2005lg/net-probe/releases/download/v0.1.0/net-probe_linux_${test_arch}"
+contains "$curl_log" "https://github.com/s2005lg/net-probe/releases/download/v0.1.0/net-probe-update-helper_linux_${test_arch}.manifest.json"
+contains "$curl_log" "https://github.com/s2005lg/net-probe/releases/download/v0.1.0/net-probe-update-helper_linux_${test_arch}.manifest.sig"
+contains "$curl_log" "https://github.com/s2005lg/net-probe/releases/download/v0.1.0/net-probe-update-helper_linux_${test_arch}"
 [ -L /usr/local/bin/net-probe ] || fail "agent binary is not a version-store symlink"
 [ "$(readlink /usr/local/bin/net-probe)" = "/opt/net-probe/versions/v0.1.0/net-probe" ] || fail "agent symlink target mismatch"
+[ ! -L /usr/local/libexec/net-probe-update-helper ] || fail "update helper must be a fixed root-owned executable"
+[ "$(stat -c '%U:%G:%a' /usr/local/libexec/net-probe-update-helper)" = "root:root:755" ] || fail "update helper ownership mismatch"
 contains "$test_dir/panel-install.out" 'Panel CA fingerprint:'
 contains "$test_dir/panel-install.out" 'NET_PROBE_ENROLLMENT_CODE=<one-use-code>'
 

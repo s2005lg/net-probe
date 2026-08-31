@@ -61,6 +61,18 @@ func RunHelper(ctx context.Context, options RootHelperOptions) error {
 		return err
 	}
 	system := &rootHelperSystem{agentUID: options.AgentUID, agentGID: options.AgentGID, updates: updates, bootID: bootID}
+	currentTarget, err := system.CurrentTarget(ctx)
+	if err != nil {
+		return fmt.Errorf("read installed Agent target: %w", err)
+	}
+	installedVersion, err := installedVersionFromTarget(currentTarget)
+	if err != nil {
+		return fmt.Errorf("derive installed Agent version: %w", err)
+	}
+	if options.CurrentVersion != "" && options.CurrentVersion != installedVersion {
+		return errors.New("configured Agent version does not match installed target")
+	}
+	options.CurrentVersion = installedVersion
 	return processPendingUpdate(ctx, options, updates, system)
 }
 
@@ -308,6 +320,17 @@ func validVersionTarget(target string) bool {
 	clean := filepath.Clean(target)
 	return filepath.IsAbs(clean) && strings.HasPrefix(clean, RootVersionsDir+string(os.PathSeparator)) &&
 		filepath.Base(clean) == "net-probe" && filepath.Dir(filepath.Dir(clean)) == RootVersionsDir
+}
+
+func installedVersionFromTarget(target string) (string, error) {
+	if !validVersionTarget(target) {
+		return "", errors.New("current Agent target is outside version store")
+	}
+	version := filepath.Base(filepath.Dir(filepath.Clean(target)))
+	if _, ok := parseSemver(version); !ok {
+		return "", errors.New("current Agent target has an invalid version")
+	}
+	return version, nil
 }
 
 func readFixedOwnedFile(path string, uid, gid int, mode os.FileMode, limit int64) ([]byte, error) {

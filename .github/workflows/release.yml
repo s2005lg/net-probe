@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25"
@@ -21,14 +23,34 @@ jobs:
           node-version: "20"
       - name: Verify frontend
         run: cd web && npm ci && npm run verify
+      - name: Verify control plane
+        run: bash tests/control-e2e.sh
+      - name: Verify race-sensitive control code
+        run: go test -race ./internal/agent ./internal/panel/control
+      - name: Verify 1000-Agent capacity
+        env:
+          NET_PROBE_CAPACITY: "1"
+        run: bash tests/capacity-control.sh
+      - name: Verify Agent size budget
+        run: bash tests/agent-size.sh
+      - name: Verify Agent idle resources
+        env:
+          NET_PROBE_RESOURCE: "1"
+        run: bash tests/agent-resource.sh
+      - name: Scan tracked sources for secrets
+        run: bash tests/secret-scan.sh
       - name: Derive release verification key
         env:
           NET_PROBE_RELEASE_SIGNING_KEY_B64: ${{ secrets.NET_PROBE_RELEASE_SIGNING_KEY_B64 }}
         run: echo "RELEASE_PUBLIC_KEY_HEX=$(go run ./cmd/net-probe-release -print-public-key)" >> "$GITHUB_ENV"
       - name: Build agent linux amd64
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME} -X main.releasePublicKeyHex=${RELEASE_PUBLIC_KEY_HEX}" -o net-probe_linux_amd64 ./cmd/net-probe
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -gcflags=all=-l -ldflags "-s -w -buildid= -X main.version=${GITHUB_REF_NAME} -X main.releasePublicKeyHex=${RELEASE_PUBLIC_KEY_HEX}" -o net-probe_linux_amd64 ./cmd/net-probe
       - name: Build agent linux arm64
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME} -X main.releasePublicKeyHex=${RELEASE_PUBLIC_KEY_HEX}" -o net-probe_linux_arm64 ./cmd/net-probe
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -gcflags=all=-l -ldflags "-s -w -buildid= -X main.version=${GITHUB_REF_NAME} -X main.releasePublicKeyHex=${RELEASE_PUBLIC_KEY_HEX}" -o net-probe_linux_arm64 ./cmd/net-probe
+      - name: Build update helper linux amd64
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -buildid= -X main.releasePublicKeyHex=${RELEASE_PUBLIC_KEY_HEX}" -o net-probe-update-helper_linux_amd64 ./cmd/net-probe-update-helper
+      - name: Build update helper linux arm64
+        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "-s -w -buildid= -X main.releasePublicKeyHex=${RELEASE_PUBLIC_KEY_HEX}" -o net-probe-update-helper_linux_arm64 ./cmd/net-probe-update-helper
       - name: Build panel linux amd64
         run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME} -X main.releasePublicKeyHex=${RELEASE_PUBLIC_KEY_HEX}" -o net-probe-panel_linux_amd64 ./cmd/net-probe-panel
       - name: Build panel linux arm64
@@ -39,10 +61,13 @@ jobs:
         run: |
           go run ./cmd/net-probe-release -artifact net-probe_linux_amd64 -version "$GITHUB_REF_NAME" -os linux -arch amd64 -url "https://github.com/s2005lg/net-probe/releases/download/${GITHUB_REF_NAME}/net-probe_linux_amd64" -minimum-panel "$GITHUB_REF_NAME" -manifest net-probe_linux_amd64.manifest.json -signature net-probe_linux_amd64.manifest.sig
           go run ./cmd/net-probe-release -artifact net-probe_linux_arm64 -version "$GITHUB_REF_NAME" -os linux -arch arm64 -url "https://github.com/s2005lg/net-probe/releases/download/${GITHUB_REF_NAME}/net-probe_linux_arm64" -minimum-panel "$GITHUB_REF_NAME" -manifest net-probe_linux_arm64.manifest.json -signature net-probe_linux_arm64.manifest.sig
+          go run ./cmd/net-probe-release -artifact net-probe-update-helper_linux_amd64 -version "$GITHUB_REF_NAME" -os linux -arch amd64 -url "https://github.com/s2005lg/net-probe/releases/download/${GITHUB_REF_NAME}/net-probe-update-helper_linux_amd64" -minimum-panel "$GITHUB_REF_NAME" -manifest net-probe-update-helper_linux_amd64.manifest.json -signature net-probe-update-helper_linux_amd64.manifest.sig
+          go run ./cmd/net-probe-release -artifact net-probe-update-helper_linux_arm64 -version "$GITHUB_REF_NAME" -os linux -arch arm64 -url "https://github.com/s2005lg/net-probe/releases/download/${GITHUB_REF_NAME}/net-probe-update-helper_linux_arm64" -minimum-panel "$GITHUB_REF_NAME" -manifest net-probe-update-helper_linux_arm64.manifest.json -signature net-probe-update-helper_linux_arm64.manifest.sig
       - name: Generate checksums
         run: |
-          sha256sum net-probe_linux_amd64 net-probe_linux_arm64 net-probe-panel_linux_amd64 net-probe-panel_linux_arm64 > SHA256SUMS
+          sha256sum net-probe_linux_amd64 net-probe_linux_arm64 net-probe-update-helper_linux_amd64 net-probe-update-helper_linux_arm64 net-probe-panel_linux_amd64 net-probe-panel_linux_arm64 > SHA256SUMS
           sha256sum net-probe_linux_amd64.manifest.json net-probe_linux_amd64.manifest.sig net-probe_linux_arm64.manifest.json net-probe_linux_arm64.manifest.sig >> SHA256SUMS
+          sha256sum net-probe-update-helper_linux_amd64.manifest.json net-probe-update-helper_linux_amd64.manifest.sig net-probe-update-helper_linux_arm64.manifest.json net-probe-update-helper_linux_arm64.manifest.sig >> SHA256SUMS
           sha256sum --check SHA256SUMS
       - name: Publish release
         uses: softprops/action-gh-release@v2
@@ -50,10 +75,16 @@ jobs:
           files: |
             net-probe_linux_amd64
             net-probe_linux_arm64
+            net-probe-update-helper_linux_amd64
+            net-probe-update-helper_linux_arm64
             net-probe-panel_linux_amd64
             net-probe-panel_linux_arm64
             net-probe_linux_amd64.manifest.json
             net-probe_linux_amd64.manifest.sig
             net-probe_linux_arm64.manifest.json
             net-probe_linux_arm64.manifest.sig
+            net-probe-update-helper_linux_amd64.manifest.json
+            net-probe-update-helper_linux_amd64.manifest.sig
+            net-probe-update-helper_linux_arm64.manifest.json
+            net-probe-update-helper_linux_arm64.manifest.sig
             SHA256SUMS

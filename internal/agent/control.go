@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coder/websocket"
 	"github.com/s2005lg/net-probe/internal/controlproto"
+	"github.com/s2005lg/net-probe/internal/wsclient"
 )
 
 const permanentControlRetry = 15 * time.Minute
@@ -125,12 +125,11 @@ func (c *ControlClient) Probe(ctx context.Context) error {
 
 func (c *ControlClient) runSession(ctx context.Context, ready func()) error {
 	httpClient := &http.Client{
-		Timeout:   20 * time.Second,
 		Transport: &http.Transport{TLSClientConfig: c.options.Identity.TLSConfig.Clone()},
 	}
-	connection, response, err := websocket.Dial(ctx, c.controlURL, &websocket.DialOptions{
-		HTTPClient: httpClient, CompressionMode: websocket.CompressionDisabled,
-	})
+	dialContext, cancelDial := context.WithTimeout(ctx, 20*time.Second)
+	connection, response, err := wsclient.Dial(dialContext, c.controlURL, httpClient)
+	cancelDial()
 	if err != nil {
 		if response != nil && (response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden) {
 			return permanentControlError{err: errors.New("control identity rejected")}
@@ -151,13 +150,13 @@ func (c *ControlClient) runSession(ctx context.Context, ready func()) error {
 	if err != nil {
 		return err
 	}
-	if err := connection.Write(ctx, websocket.MessageText, helloBody); err != nil {
+	if err := connection.Write(ctx, wsclient.MessageText, helloBody); err != nil {
 		return fmt.Errorf("write control hello: %w", err)
 	}
 	welcomeContext, cancelWelcome := context.WithTimeout(ctx, 15*time.Second)
 	messageType, body, err := connection.Read(welcomeContext)
 	cancelWelcome()
-	if err != nil || messageType != websocket.MessageText {
+	if err != nil || messageType != wsclient.MessageText {
 		return permanentControlError{err: errors.New("control welcome missing")}
 	}
 	var welcome controlproto.Welcome
@@ -186,7 +185,7 @@ func (c *ControlClient) runSession(ctx context.Context, ready func()) error {
 		commandQueue, commandResults = startCommandWorker(sessionContext, 32, c.options.HandleCommand)
 	}
 	type inboundMessage struct {
-		messageType websocket.MessageType
+		messageType wsclient.MessageType
 		body        []byte
 		err         error
 	}
@@ -209,13 +208,13 @@ func (c *ControlClient) runSession(ctx context.Context, ready func()) error {
 	for {
 		select {
 		case <-ctx.Done():
-			_ = connection.Close(websocket.StatusNormalClosure, "shutdown")
+			_ = connection.Close(wsclient.StatusNormalClosure, "shutdown")
 			return nil
 		case event := <-inbound:
 			if event.err != nil {
 				return fmt.Errorf("read control channel: %w", event.err)
 			}
-			if event.messageType != websocket.MessageText {
+			if event.messageType != wsclient.MessageText {
 				return permanentControlError{err: errors.New("unsupported control message type")}
 			}
 			var command controlproto.Command
@@ -242,7 +241,7 @@ func (c *ControlClient) runSession(ctx context.Context, ready func()) error {
 				c.onHeartbeat(heartbeat)
 			}
 			body, _ := json.Marshal(heartbeat)
-			if err := connection.Write(ctx, websocket.MessageText, body); err != nil {
+			if err := connection.Write(ctx, wsclient.MessageText, body); err != nil {
 				return fmt.Errorf("write control heartbeat: %w", err)
 			}
 		case <-pingTicker.C:
@@ -280,12 +279,12 @@ func startCommandWorker(ctx context.Context, queueSize int, handler func(context
 	return queue, results
 }
 
-func writeCommandResult(ctx context.Context, connection *websocket.Conn, result controlproto.CommandResult) error {
+func writeCommandResult(ctx context.Context, connection *wsclient.Conn, result controlproto.CommandResult) error {
 	resultBody, err := json.Marshal(result)
 	if err != nil {
 		return err
 	}
-	if err := connection.Write(ctx, websocket.MessageText, resultBody); err != nil {
+	if err := connection.Write(ctx, wsclient.MessageText, resultBody); err != nil {
 		return fmt.Errorf("write command result: %w", err)
 	}
 	return nil

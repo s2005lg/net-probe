@@ -1,190 +1,158 @@
 # net-probe
 
-`net-probe` is a small Linux agent that periodically collects host health and
-detects installed proxy/VPN server processes, then uploads a JSON report to a
-panel or webhook sink.
+`net-probe` 是面向 Linux VPS 的轻量监控与服务探测系统，由 Panel 和常驻 Agent 组成。Agent 采集主机健康、出口 IP/国家地区、服务状态及可用遥测，并通过 mTLS WebSocket 与 Panel 保持出站控制连接。
 
-## Features
+项目采用 [MIT License](LICENSE)。
 
-- Runs as a periodic `systemd` timer (no long-lived daemon).
-- Detects services by matching systemd units and running binaries against
-  built-in and custom YAML templates.
-- Collects hostname, OS/kernel metadata, load, memory, disk usage, uptime, and
-  available package upgrades.
-- Reports listening ports and certificate expiry for detected services.
-- Sends reports over HTTPS to `panel` or `webhook` sinks with optional bearer
-  token authentication.
+## 能力概览
 
-## Recommended installation order
+- 常驻 `systemd` Agent：周期采集、断线重连、即时采集、配置重载和自检。
+- 安全注册：Panel CA 指纹固定、10 分钟内有效的一次性注册码、每个 Agent 独立的 90 天客户端证书。
+- 控制通道：仅出站 WSS、mTLS、Ed25519 命令签名、单调序列号、防重放、命令 TTL 和审计历史。
+- 安全升级：签名 Release 导入、管理员重新认证、输入确认、按节点/批量升级、就绪证明及自动回滚。
+- 主机指标：负载、内存、磁盘、运行时间、可升级软件包和公网出口 IPv4/IPv6。
+- 服务识别：Hysteria2、Xray、V2Ray、sing-box、Shadowsocks、Trojan、TUIC、AnyTLS。
+- 协议标签：VLESS 是 Xray/sing-box 的协议标签，不是独立守护进程。
 
-The panel and agents share a single agent token: the panel requires it to
-accept reports, and every agent must present the same value when it uploads.
-Install the panel first, then the agents.
+不同服务能提供的指标并不相同。Panel 按每项能力展示 `supported`、`unsupported` 或 `unknown`，并区分未配置、已禁用、采集失败和真实的零值，不会把 AnyTLS 等无法原生提供的流量或连接数显示成 0。
 
-1. Install the panel and note the `agent token` it prints (or pin your own):
+## 安装
 
-   ```bash
-   curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install-panel.sh | sudo bash
-   # output includes: agent token: <token>
-   ```
+当前 Agent 使用 control-v1，不保证兼容旧 Panel。必须先安装同一 Release 的 Panel，再从 Panel 生成 Agent 安装命令。
 
-2. Install the agent on each node with the panel URL and the same token:
+### 1. 安装 Panel
 
-   ```bash
-   curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install.sh | \
-     sudo NET_PROBE_PANEL_URL="https://<panel-ip>:<port>" \
-          NET_PROBE_PANEL_TOKEN="<same-token>" bash
-   ```
-
-If you omit the token:
-
-- Panel: the installer generates a random token and prints it — copy that value
-  to every agent.
-- Agent: the installer configures the panel sink without a token, so the panel
-  rejects reports with `401 Unauthorized`. Always pass `NET_PROBE_PANEL_TOKEN`
-  matching the panel's token.
-
-## One-line install
-
-Install the latest release directly from GitHub:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install.sh | sudo bash
-```
-
-Install a specific release:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install.sh | \
-  sudo NET_PROBE_VERSION=v0.1.0 bash
-```
-
-Configure a panel sink during installation (optional). The token is written to
-`/etc/net-probe/panel-token` with mode `0600`:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install.sh | \
-  sudo NET_PROBE_PANEL_URL="https://panel.example.com" \
-       NET_PROBE_PANEL_TOKEN="your-token" bash
-```
-
-If no panel URL is provided, the installer writes a placeholder webhook config
-to `/etc/net-probe/config.toml` for you to edit.
-
-The installer:
-
-- writes the binary to `/usr/local/bin/net-probe`
-- creates the `net-probe` system user
-- writes the config to `/etc/net-probe/config.toml`
-- installs and enables the `net-probe.timer` systemd unit
-- runs the agent every 1 minute by default
-
-## One-line uninstall
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/uninstall.sh | sudo bash
-```
-
-This stops and disables the timer, removes the binary, config directory,
-systemd units, and the `net-probe` system user, leaving no residue.
-
-## Install the panel
-
-The `net-probe-panel` is a single binary with the web UI embedded. It listens
-on a random port in the range 20000–65535 (override with
-`NET_PROBE_PANEL_PORT`) with a self-signed certificate and stores data in
-SQLite:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install-panel.sh | sudo bash
-```
-
-The installer generates a random port, agent token, and admin password and
-prints all three at the end. To pin a version or preset them:
+Panel 必须有一个 Agent 可访问、证书覆盖的 HTTPS 公网地址：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install-panel.sh | \
   sudo NET_PROBE_PANEL_VERSION=v0.1.0 \
-       NET_PROBE_PANEL_PORT=24443 \
-       NET_PROBE_PANEL_AGENT_TOKEN="agent-token" \
-       NET_PROBE_PANEL_ADMIN_PASSWORD="admin-password" bash
+       NET_PROBE_PANEL_PUBLIC_URL="https://panel.example.com:24443" \
+       NET_PROBE_PANEL_PORT=24443 bash
 ```
 
-To generate the agent token yourself instead of letting the installer pick a
-random one, use `openssl`:
+可选设置 `NET_PROBE_PANEL_ADMIN_PASSWORD`；不设置时安装器会生成并打印。安装结果包括：
+
+- `/usr/local/bin/net-probe-panel`
+- `/etc/net-probe-panel/config.toml`
+- `/etc/net-probe-panel/panel.env`（`0600`）
+- `net-probe-panel.service`
+- Panel CA SHA-256 指纹
+
+打开 Panel 地址，以 `admin` 登录。
+
+### 2. 在 Panel 创建 Agent 注册命令
+
+进入“探针管理”，创建一次性注册码。注册码最长 10 分钟有效且只能消费一次。Panel 会生成包含以下固定值的完整命令：
+
+- 明确的 Release 版本，不接受 `latest`
+- Panel HTTPS 地址
+- Panel CA 指纹
+- 一次性注册码
+- Release Ed25519 公钥
+
+把 Panel 显示的命令原样复制到目标 VPS 执行。等价形式如下：
 
 ```bash
-openssl rand -hex 24
+curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install.sh | \
+  sudo NET_PROBE_VERSION="vX.Y.Z" \
+       NET_PROBE_PANEL_URL="https://panel.example.com:24443" \
+       NET_PROBE_CA_FINGERPRINT="<64位小写十六进制指纹>" \
+       NET_PROBE_ENROLLMENT_CODE="<一次性注册码>" \
+       NET_PROBE_RELEASE_PUBLIC_KEY_HEX="<64位小写十六进制公钥>" bash
 ```
 
-This prints a 48-character hex string. Use that exact value for
-`NET_PROBE_PANEL_AGENT_TOKEN` when installing the panel and for the panel sink
-token on the agent (for example `NET_PROBE_PANEL_TOKEN` in
-`/etc/net-probe/config.toml`); if they do not match, the panel rejects agent
-reports with `401 Unauthorized`. The token is stored in
-`/etc/net-probe-panel/config.toml` as `[agent].token` and must be kept secret.
+安装器会先下载并验证 Agent 与 root update helper 的签名清单、大小和 SHA-256，再在临时目录完成注册、首次上报和 mTLS WSS hello/welcome 预检。只有预检成功后才切换生产文件；失败不会替换旧部署。
 
-The panel:
+安装结果包括：
 
-- writes the binary to `/usr/local/bin/net-probe-panel`
-- creates the `net-probe-panel` system user
-- writes config to `/etc/net-probe-panel/config.toml` and the admin password
-  to `/etc/net-probe-panel/panel.env` (mode `0600`)
-- installs and enables the `net-probe-panel` systemd service
-- listens on the chosen port and generates a long-lived self-signed certificate
-  on first start
+- `/usr/local/bin/net-probe` → `/opt/net-probe/versions/<version>/net-probe`
+- `/usr/local/libexec/net-probe-update-helper`（root-owned）
+- `/etc/net-probe/config.toml`
+- `/etc/net-probe/pki/`（Agent 身份与固定信任材料）
+- `net-probe.service`
+- `net-probe-update.path` 与受限的 root helper service
 
-Open `https://<panel-ip>:<port>` in a browser (accept the self-signed
-certificate) and log in with the admin password. Agent sinks must set
-`tls_skip_verify = true` (or point `tls_ca_file` at the panel cert) because the
-certificate is self-signed.
+旧的 `net-probe.timer` 会被停用并移除。
 
-## Minimal configuration
+## 常驻运行与状态
 
-Edit `/etc/net-probe/config.toml`:
+```bash
+sudo systemctl status net-probe.service
+sudo journalctl -u net-probe.service --since "10 minutes ago"
+sudo systemctl restart net-probe.service
+```
+
+Agent 根据 `report_interval` 周期采集，同时维持控制连接。Panel 中常见状态：
+
+- 在线：最近心跳在离线阈值内。
+- 离线：超过阈值未收到心跳。
+- 已撤销：证书身份被管理员撤销，必须重新注册。
+- 证书临近到期：Agent 会在到期前通过 mTLS 自动续期；身份文件损坏、证书过期或被撤销时需重新创建一次性注册码。
+
+配置修改后可在 Panel 下发“重载配置”，也可以执行：
+
+```bash
+sudo systemctl kill -s HUP net-probe.service
+```
+
+## Panel 操作权限
+
+- `viewer`：查看节点、指标、Release 和命令历史。
+- `operator`：包含查看权限，可下发即时采集、重载配置和自检。
+- `admin`：节点、标签、设置、注册、吊销和升级管理。
+
+升级属于高风险操作，仅 `admin` 可执行。批量升级前必须再次输入当前密码完成短时重新认证，并输入 Panel 要求的确认文本。即时采集 TTL 为 5 分钟，配置重载和自检为 30 分钟，升级为 24 小时；到期命令不会再派发。Agent 会按序执行并持久化去重状态。
+
+## 签名升级与回滚
+
+1. 在“探针管理”导入 GitHub Release 的 Agent manifest 与签名。
+2. 确认版本、架构、哈希、有效期和最小 Panel 版本。
+3. 重新认证并选择目标 Agent。
+4. 查看命令历史中的 `queued`、`dispatched`、`accepted`、`running`、`succeeded`、`failed` 或 `expired`。
+
+Agent 下载后再次验证 Release 签名、平台、版本、URL、大小和哈希。root helper 还会独立验证 Panel 命令签名及 root-owned 信任材料，然后原子切换版本并重启。新进程必须在 120 秒内提交与 Agent、命令、版本及当前 boot ID 绑定的就绪证明，否则自动切回上一版本。服务器上只保留当前版和上一版 Agent，失败原因与回滚状态可在命令历史查看。
+
+## 最小配置
+
+安装器生成的 `/etc/net-probe/config.toml` 类似：
 
 ```toml
 [agent]
 node_id = "edge-01"
 log_level = "info"
+report_interval = "60s"
+collect_timeout = "45s"
+shutdown_timeout = "20s"
 
-[[sink]]
-type = "panel"
-url = "https://panel.example.com"
-token_env = "NET_PROBE_PANEL_TOKEN"
+[panel]
+url = "https://panel.example.com:24443"
+ca_file = "/etc/net-probe/pki/ca.crt"
+cert_file = "/etc/net-probe/pki/agent.crt"
+key_file = "/etc/net-probe/pki/agent.key"
+command_key_file = "/etc/net-probe/pki/command-signing.pub"
+release_key_file = "/etc/net-probe/pki/release-signing.pub"
 
 [collect]
 disk_mounts = ["/"]
 upgradable = true
-
-[collect.egress_ip]
-enabled = true
-refresh_interval = "6h"
-timeout = "3s"
-ipv4_endpoints = ["https://api.ipify.org", "https://4.ident.me"]
-ipv6_endpoints = ["https://api6.ipify.org", "https://6.ident.me"]
-
-[detect]
-include = ["hysteria2", "xray", "v2ray", "sing-box", "shadowsocks", "trojan", "tuic", "anytls"]
-custom_dir = "/etc/net-probe/services.d"
 ```
 
-Provide the token in the environment when the timer runs, for example in a
-systemd drop-in or the shell that runs `net-probe`.
+检查配置并预览报告：
 
-Omit `[collect.egress_ip]` to use these defaults. Within each IP family, the
-endpoints are ordered fallbacks tried in listed order; successful public egress
-IP values are cached in `/etc/net-probe/egress-ip-cache.json` with mode `0600`,
-and a provider failure does not stop the rest of the report from being sent.
-Failed discovery for one address family is retried after 5 minutes; repeated
-failures double that delay up to 6 hours. Retry state is stored in the same
-cache, so the one-shot Agent does not restart the delay every minute, while the
-last successful address remains available.
+```bash
+sudo net-probe --check --config /etc/net-probe/config.toml
+```
 
-## Panel geolocation configuration
+执行一次采集并退出：
 
-Add the following optional default section to
-`/etc/net-probe-panel/config.toml` to configure public egress IP geolocation:
+```bash
+sudo -u net-probe net-probe --once --config /etc/net-probe/config.toml
+```
+
+## 出口 IP 与地理位置
+
+Agent 自动探测公网出口 IPv4/IPv6，缓存成功结果并随报告上送。Panel 使用持久化缓存补充国家/地区，外部提供方失败不会阻断主报告，也不会覆盖上一次成功位置。可在 Panel 配置中调整：
 
 ```toml
 [geo]
@@ -195,371 +163,48 @@ timeout = "4s"
 token_env = ""
 ```
 
-The default ipwhois provider allows 1,000 requests per day. The Panel keeps a
-SQLite cache and reconciles node geography with that cache, so repeated IPs do
-not require a provider request on every report. For compatible bearer-token
-providers, set `token_env` to the name of an environment variable containing
-the token; do not put the token itself in the configuration file. A failed Geo
-lookup is retried after 5 minutes with an exponentially increasing delay capped
-at 6 hours. This retry state is persisted in SQLite and does not replace the
-last successful location.
+## 服务遥测
 
-## Validate configuration and preview a report
+内置模板位于 `internal/detect/builtin/`。服务实现与协议标签分离，例如 VLESS 由 Xray 或 sing-box 提供。流量和在线连接数是服务实例聚合值，不承诺是某个 inbound 或用户的独立值。
 
-Run a dry-run that validates the config, collects the current host and service
-data, and prints a JSON report preview without sending it:
-
-```bash
-sudo net-probe --check --config /etc/net-probe/config.toml
-```
-
-To print the version:
-
-```bash
-net-probe --version
-```
-
-## Supported services
-
-The built-in detection templates are:
-
-- Hysteria2
-- Xray
-- V2Ray
-- sing-box
-- Shadowsocks
-- Trojan
-- TUIC
-- AnyTLS
-
-See `internal/detect/builtin/*.yaml` for the built-in patterns. Custom
-templates are loaded from `/etc/net-probe/services.d` by default.
-
-## Service telemetry and protocol tags
-
-The eight entries above are **service implementations** detected as systemd
-units or binaries. Protocols are tags on a detected service instance: VLESS is
-an Xray or sing-box protocol tag, not a ninth standalone daemon. Traffic and
-online-client telemetry is an aggregate for that service instance; it is not a
-per-VLESS-inbound or per-user total.
-
-Reports keep schema version `1`. The additive `capabilities` and `telemetry`
-fields describe each metric independently:
-
-- Capability `supported` means the Agent has a collector; an `ok` observation
-  is shown as its numeric value.
-- Capability `unsupported` with `native_api_unavailable` is labelled
-  `内核不支持` in the Panel; with `collector_not_implemented` it is labelled
-  `探针暂未支持`.
-- Capability `unknown` (and unrecognized future capability values) is labelled
-  `能力未知，请升级探针`.
-- Observation `not_configured` is labelled `需启用统计接口`; `disabled` is
-  labelled `已禁用`; and `error` is labelled `采集失败` (with a safe error code
-  available as detail). An `ok` observation may legitimately contain zero.
-
-Disable one service's telemetry collector without hiding the detected service:
+可禁用某类服务的遥测采集而不隐藏服务发现结果：
 
 ```toml
-[stats.services.<type>]
+[stats.services.anytls]
 enabled = false
 ```
 
-Older Agents that only send legacy `stats` reports remain accepted. Their
-capability labels are necessarily less precise, so upgrade Agents to receive
-explicit capability and observation states. When telemetry is present, a new
-Panel uses it instead of the lossy legacy `stats` fields, including when the
-telemetry observation is an error.
+自定义模板放在 `/etc/net-probe/services.d/*.yaml`，然后向 Agent 发送配置重载或 `SIGHUP`。
 
-## Security notes
+## 网络与安全边界
 
-- The agent runs as root so it can read `/proc/<pid>/fd` of other processes
-  (needed to report listening ports); the systemd unit still sets
-  `NoNewPrivileges=true` and `ProtectSystem=strict`.
-- Panel sinks require HTTPS unless `insecure_allow_http = true` is explicitly
-  set for localhost-only or otherwise trusted endpoints.
-- Secrets are not embedded in the report or config; use `token_env` or
-  `token_file` so the token is read from an environment variable or file.
+Agent 不需要任何入站端口。防火墙只需允许：
 
-## Writing a detection template
+- Agent → Panel HTTPS/WSS 端口（TCP）。
+- Agent → GitHub Releases 的 HTTPS（TCP 443，仅升级时）。
+- Agent → 配置的出口 IP 查询服务和系统 DNS/NTP。
 
-Create a YAML file in `/etc/net-probe/services.d/`, for example
-`my-service.yaml`:
+Panel 只需开放其 HTTPS 端口给管理员和 Agent。建议在云防火墙限制来源，并使用域名和受信证书；若使用自签 CA，Agent 依靠安装时固定的 CA 指纹建立初始信任，不提供 `skip-cert-verify` 开关。
 
-```yaml
-id: my-service
-name: My Service
-units: ["my-service", "my-service@.*"]
-binary_patterns: ["my-service"]
-version_cmd: ["--version"]
-transport: ["tcp"]
-cert_paths: []
-listen_ports: []
-stats_kind: ""
-```
+Agent 主进程以无登录权限的 `net-probe` 用户运行，并启用 systemd 文件系统与设备隔离。只有独立 helper 以 root 运行，且无网络访问，只能处理固定目录中的请求、切换固定 Agent 软链接和重启服务。
 
-Template fields:
+## 无敏感信息排障
 
-- `id`: stable identifier used in the report `type` field.
-- `name`: human-readable service name.
-- `units`: regular expressions anchored to systemd unit names (without the
-  `.service` suffix).
-- `binary_patterns`: regular expressions matched against the service's
-  `ExecStart` path.
-- `version_cmd`: arguments used to query the binary version.
-- `transport`: informational transport list, such as `tcp` or `udp`.
-- `cert_paths`: optional paths checked for TLS certificate expiry.
-- `listen_ports`: optional ports that must be present for `listen_ok` to be
-  true.
-- `stats_kind`: optional service-specific statistics kind identifier.
-
-After adding or editing templates, restart the timer so the next run picks
-them up:
+不要在工单、截图或日志中粘贴注册码、私钥、管理员密码或完整安装命令。安全检查顺序：
 
 ```bash
-sudo systemctl restart net-probe.timer
+sudo systemctl status net-probe.service --no-pager
+sudo journalctl -u net-probe.service -n 100 --no-pager
+sudo stat -c '%U:%G %a %n' /etc/net-probe/config.toml /etc/net-probe/pki/*
+sudo readlink /usr/local/bin/net-probe
 ```
 
----
+分享日志前删除 URL 中的内部主机名/IP、Agent ID、命令 ID 和证书序列号。注册码一旦泄露应立即丢弃并重新生成；Agent 私钥疑似泄露时应先在 Panel 吊销，再重新注册。
 
-## 中文说明
-
-`net-probe` 是一个轻量级 Linux 探针，会定时采集主机健康信息，识别已安装的代理 / VPN 服务进程，并把 JSON 报告上传到 panel 或 webhook。
-
-### 功能特性
-
-- 通过 `systemd` timer 定时运行，不使用常驻守护进程。
-- 通过内置或自定义 YAML 模板，匹配 systemd 单元和运行中的二进制文件来识别服务。
-- 采集主机名、操作系统 / 内核信息、负载、内存、磁盘使用率、运行时间以及可升级软件包数量。
-- 报告已识别服务的监听端口和证书到期时间。
-- 通过 HTTPS 向 `panel` 或 `webhook` 上报，支持可选的 Bearer Token 认证。
-
-### 推荐安装顺序
-
-Panel 和 Agent 共享同一个 Agent Token：Panel 用它校验上报，每个 Agent 上报时都必须携带同一个值。建议先安装 Panel，再安装 Agent。
-
-1. 先安装 Panel，并记录它最后打印的 `agent token`（也可以自己指定）：
-
-   ```bash
-   curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install-panel.sh | sudo bash
-   # 输出中会包含：agent token: <token>
-   ```
-
-2. 再在每个节点安装 Agent，传入 Panel 地址和同一个 Token：
-
-   ```bash
-   curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install.sh |   sudo NET_PROBE_PANEL_URL="https://<panel-ip>:<port>"        NET_PROBE_PANEL_TOKEN="<同一个token>" bash
-   ```
-
-如果省略 Token：
-
-- Panel 侧：安装脚本会随机生成一个 Token 并打印，需要把这个值复制给所有 Agent。
-- Agent 侧：安装脚本会生成不带 Token 的 panel sink，Panel 会以 `401 Unauthorized` 拒绝上报。因此 Agent 侧务必传入与 Panel 一致的 `NET_PROBE_PANEL_TOKEN`。
-
-### 一键安装
-
-直接从 GitHub 安装最新版本：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install.sh | sudo bash
-```
-
-安装指定版本：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install.sh |   sudo NET_PROBE_VERSION=v0.1.0 bash
-```
-
-安装时配置 panel（可选）。Token 会写入 `/etc/net-probe/panel-token`，文件权限为 `0600`：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install.sh |   sudo NET_PROBE_PANEL_URL="https://panel.example.com"        NET_PROBE_PANEL_TOKEN="your-token" bash
-```
-
-如果没有提供 panel URL，安装脚本会生成一个占位的 webhook 配置到 `/etc/net-probe/config.toml`，由你自行编辑。
-
-安装脚本会：
-
-- 将二进制文件写入 `/usr/local/bin/net-probe`
-- 创建 `net-probe` 系统用户
-- 将配置写入 `/etc/net-probe/config.toml`
-- 安装并启用 `net-probe.timer` systemd 单元
-- 默认每 1 分钟运行一次探针
-
-### 一键卸载
+## 卸载
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/uninstall.sh | sudo bash
 ```
 
-卸载脚本会停止并禁用 timer，删除二进制文件、配置目录、systemd 单元和 `net-probe` 系统用户，不留下残留。
-
-### 安装 panel
-
-`net-probe-panel` 是一个内置 Web UI 的单文件二进制程序。它默认监听 20000–65535 范围内的随机端口，可通过 `NET_PROBE_PANEL_PORT` 覆盖，使用自签名证书，并将数据存储到 SQLite：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install-panel.sh | sudo bash
-```
-
-安装脚本会随机生成端口、Agent Token 和管理员密码，并在最后打印这三项信息。如需固定版本或预先指定：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install-panel.sh |   sudo NET_PROBE_PANEL_VERSION=v0.1.0        NET_PROBE_PANEL_PORT=24443        NET_PROBE_PANEL_AGENT_TOKEN="agent-token"        NET_PROBE_PANEL_ADMIN_PASSWORD="admin-password" bash
-```
-
-如需自己生成 Agent Token，而不是让安装脚本随机生成，可以使用 `openssl`：
-
-```bash
-openssl rand -hex 24
-```
-
-这会生成一个 48 位十六进制字符串。安装 panel 时，将该值作为 `NET_PROBE_PANEL_AGENT_TOKEN` 传入；在 Agent 侧，把同一个值设置为 panel sink 的 Token（例如 `/etc/net-probe/config.toml` 中的 `NET_PROBE_PANEL_TOKEN`）。两者不一致时，panel 会以 `401 Unauthorized` 拒绝 Agent 上报。Token 会保存在 `/etc/net-probe-panel/config.toml` 的 `[agent].token` 中，请妥善保管。
-
-panel 会：
-
-- 将二进制文件写入 `/usr/local/bin/net-probe-panel`
-- 创建 `net-probe-panel` 系统用户
-- 将配置写入 `/etc/net-probe-panel/config.toml`，并将管理员密码写入 `/etc/net-probe-panel/panel.env`（权限 `0600`）
-- 安装并启用 `net-probe-panel` systemd 服务
-- 监听所选端口，并在首次启动时生成长期有效的自签名证书
-
-在浏览器中打开 `https://<panel-ip>:<port>`，接受自签名证书，然后使用管理员密码登录。由于证书是自签名的，Agent 上报时需要设置 `tls_skip_verify = true`，或将 `tls_ca_file` 指向 panel 证书。
-
-### 最小配置示例
-
-编辑 `/etc/net-probe/config.toml`：
-
-```toml
-[agent]
-node_id = "edge-01"
-log_level = "info"
-
-[[sink]]
-type = "panel"
-url = "https://panel.example.com"
-token_env = "NET_PROBE_PANEL_TOKEN"
-
-[collect]
-disk_mounts = ["/"]
-upgradable = true
-
-[collect.egress_ip]
-enabled = true
-refresh_interval = "6h"
-timeout = "3s"
-ipv4_endpoints = ["https://api.ipify.org", "https://4.ident.me"]
-ipv6_endpoints = ["https://api6.ipify.org", "https://6.ident.me"]
-
-[detect]
-include = ["hysteria2", "xray", "v2ray", "sing-box", "shadowsocks", "trojan", "tuic", "anytls"]
-custom_dir = "/etc/net-probe/services.d"
-```
-
-在 timer 运行时通过环境变量提供 Token，例如在 systemd drop-in 文件或运行 `net-probe` 的 shell 中设置。
-
-省略 `[collect.egress_ip]` 时会使用这些默认值。每个 IP 地址族的 endpoints 都是按列出顺序尝试的回退链；成功获取的公网出口 IP 会以 `0600` 权限缓存到
-`/etc/net-probe/egress-ip-cache.json`，单个 provider 失败不会阻止其余报告发送。某个地址族发现失败后会在 5 分钟后重试；连续失败时延迟按指数增长，最长为 6 小时。重试状态保存在同一缓存中，因此每分钟启动的一次性 Agent 不会重置延迟，最后一次成功地址仍会继续使用。
-
-### Panel 地理位置配置
-
-在 `/etc/net-probe-panel/config.toml` 中加入以下可选的默认段，以配置公网出口 IP 的地理位置查询：
-
-```toml
-[geo]
-refresh_interval = "12h"
-provider = "ipwhois"
-url = "https://ipwho.is/{ip}?lang=zh-CN"
-timeout = "4s"
-token_env = ""
-```
-
-默认的 ipwhois provider 每天允许 1,000 次请求。Panel 使用 SQLite 缓存并将节点地理位置与缓存协调，因此重复 IP 不会在每次上报时都请求 provider。查询失败后会在 5 分钟后重试，连续失败时延迟按指数增长并在 6 小时封顶；该状态持久化在 SQLite 中，且不会覆盖最后一次成功的地理位置。对于兼容 bearer token 的 provider，请将 `token_env` 设为包含 Token 的环境变量名；不要把 Token 本身写入配置文件。
-
-### 校验配置并预览报告
-
-执行 dry-run，校验配置、采集当前主机和服务数据，并打印 JSON 报告预览，不会真正上报：
-
-```bash
-sudo net-probe --check --config /etc/net-probe/config.toml
-```
-
-查看版本：
-
-```bash
-net-probe --version
-```
-
-### 支持的服务
-
-内置检测模板包括：
-
-- Hysteria2
-- Xray
-- V2Ray
-- sing-box
-- Shadowsocks
-- Trojan
-- TUIC
-- AnyTLS
-
-内置匹配规则位于 `internal/detect/builtin/*.yaml`。默认从 `/etc/net-probe/services.d` 加载自定义模板。
-
-### 服务遥测与协议标签
-
-上面的八项是按 systemd 单元或二进制文件识别的**服务实现**。协议是已识别服务实例上的标签：VLESS 是 Xray 或 sing-box 的协议标签，不是第九个独立守护进程。流量和在线连接遥测都是该服务实例的聚合值，不是按 VLESS 入站或用户拆分的总计。
-
-报告仍使用 schema version `1`。新增的 `capabilities` 和 `telemetry` 字段分别说明每项指标：
-
-- `supported` 表示 Agent 具有采集器；观测状态为 `ok` 时，Panel 显示对应数值。
-- `unsupported` 且原因为 `native_api_unavailable` 时显示 `内核不支持`；原因为 `collector_not_implemented` 时显示 `探针暂未支持`。
-- `unknown`（以及无法识别的未来能力值）显示 `能力未知，请升级探针`。
-- 观测状态 `not_configured` 显示 `需启用统计接口`，`disabled` 显示 `已禁用`，`error` 显示 `采集失败`（可查看安全的错误代码）。`ok` 状态的数值可以合法地为零。
-
-使用下面的配置可禁用某一个服务的遥测采集器，但不会隐藏已识别的服务：
-
-```toml
-[stats.services.<type>]
-enabled = false
-```
-
-只发送旧版 `stats` 报告的 Agent 仍可被接收，但其能力标签无法同样精确；建议升级 Agent，以获得明确的能力和观测状态。新 Panel 在遥测字段存在时会使用遥测字段，而不会使用有损的旧版 `stats`，即使遥测结果为错误也是如此。
-
-### 安全说明
-
-- Agent 以 root 身份运行，以便读取其他进程的 `/proc/<pid>/fd`（报告监听端口所需）；systemd 单元仍然设置了 `NoNewPrivileges=true` 和 `ProtectSystem=strict`。
-- panel 上报默认要求 HTTPS，除非针对仅限本机或其他可信端点显式设置 `insecure_allow_http = true`。
-- 密钥不会写入报告或配置文件；请使用 `token_env` 或 `token_file`，让 Token 从环境变量或文件中读取。
-
-### 编写检测模板
-
-在 `/etc/net-probe/services.d/` 中创建 YAML 文件，例如 `my-service.yaml`：
-
-```yaml
-id: my-service
-name: My Service
-units: ["my-service", "my-service@.*"]
-binary_patterns: ["my-service"]
-version_cmd: ["--version"]
-transport: ["tcp"]
-cert_paths: []
-listen_ports: []
-stats_kind: ""
-```
-
-模板字段说明：
-
-- `id`：报告中 `type` 字段使用的稳定标识。
-- `name`：便于阅读的服务名称。
-- `units`：匹配 systemd 单元名称的正则表达式，不包含 `.service` 后缀。
-- `binary_patterns`：匹配服务 `ExecStart` 路径的正则表达式。
-- `version_cmd`：查询二进制版本时使用的参数。
-- `transport`：信息性的传输方式列表，例如 `tcp` 或 `udp`。
-- `cert_paths`：可选，用于检查 TLS 证书到期时间的路径。
-- `listen_ports`：可选，`listen_ok` 为 true 时必须存在的端口列表。
-- `stats_kind`：可选，服务专用的统计类型标识。
-
-添加或修改模板后，重启 timer 让下一次运行生效：
-
-```bash
-sudo systemctl restart net-probe.timer
-```
+卸载前如需保留审计和历史指标，请先备份 Panel 的 `/var/lib/net-probe-panel`。

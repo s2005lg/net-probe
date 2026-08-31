@@ -11,78 +11,21 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"os/user"
 	"path/filepath"
-	"runtime"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/s2005lg/net-probe/internal/agent"
 	"github.com/s2005lg/net-probe/internal/config"
-	"github.com/s2005lg/net-probe/internal/controlproto"
 	"github.com/s2005lg/net-probe/internal/detect"
-	npupdate "github.com/s2005lg/net-probe/internal/update"
 )
 
 var version = "dev"
 var releasePublicKeyHex string
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "internal-update-helper" {
-		if len(os.Args) != 2 {
-			fmt.Fprintln(os.Stderr, "internal-update-helper accepts no arguments")
-			os.Exit(2)
-		}
-		os.Exit(runUpdateHelper(os.Stderr))
-	}
 	os.Exit(runCLI(os.Args[1:], os.Stdin, os.Stdout, os.Stderr, agent.Enroll))
-}
-
-func runUpdateHelper(stderr io.Writer) int {
-	if releasePublicKeyHex == "" {
-		fmt.Fprintln(stderr, "release verification key is not embedded")
-		return 2
-	}
-	configPath := filepath.Join(agent.ConfigDir(), "config.toml")
-	cfg, err := config.Load(configPath)
-	if err != nil || cfg.Validate() != nil {
-		fmt.Fprintln(stderr, "load Agent configuration")
-		return 2
-	}
-	if err := agent.VerifyReleaseKeyPin(cfg.Panel.ReleaseKeyFile, releasePublicKeyHex); err != nil {
-		fmt.Fprintln(stderr, err)
-		return 2
-	}
-	identity, err := agent.LoadIdentity(cfg.Panel.URL, filepath.Dir(cfg.Panel.CAFile))
-	if err != nil {
-		fmt.Fprintln(stderr, "load Agent identity")
-		return 2
-	}
-	account, err := user.Lookup("net-probe")
-	if err != nil {
-		fmt.Fprintln(stderr, "resolve net-probe account")
-		return 2
-	}
-	uid, uidErr := strconv.Atoi(account.Uid)
-	gid, gidErr := strconv.Atoi(account.Gid)
-	if uidErr != nil || gidErr != nil || uid <= 0 || gid <= 0 {
-		fmt.Fprintln(stderr, "invalid net-probe account")
-		return 2
-	}
-	if runtime.GOOS != "linux" {
-		fmt.Fprintln(stderr, "update helper requires Linux")
-		return 2
-	}
-	if err := npupdate.RunHelper(context.Background(), npupdate.RootHelperOptions{
-		PublicKey: identity.ReleaseKey, CurrentVersion: version, ControlVersion: controlproto.Version,
-		AgentID: identity.AgentID, AgentUID: uid, AgentGID: gid,
-	}); err != nil {
-		fmt.Fprintln(stderr, "update helper failed")
-		return 1
-	}
-	return 0
 }
 
 type enrollFunc func(context.Context, *http.Client, agent.EnrollmentOptions) (*agent.Identity, error)

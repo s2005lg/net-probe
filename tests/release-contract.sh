@@ -14,7 +14,7 @@ contains LICENSE "Copyright (c) 2026 s2005lg"
 contains LICENSE "Permission is hereby granted, free of charge"
 not_contains README.md "v0.2.0"
 contains README.md "NET_PROBE_PANEL_VERSION=v0.1.0"
-contains .github/workflows/release.yml "sha256sum net-probe_linux_amd64 net-probe_linux_arm64 net-probe-panel_linux_amd64 net-probe-panel_linux_arm64 > SHA256SUMS"
+contains .github/workflows/release.yml "sha256sum net-probe_linux_amd64 net-probe_linux_arm64 net-probe-update-helper_linux_amd64 net-probe-update-helper_linux_arm64 net-probe-panel_linux_amd64 net-probe-panel_linux_arm64 > SHA256SUMS"
 contains .github/workflows/release.yml "sha256sum --check SHA256SUMS"
 contains .github/workflows/release.yml "npm run verify"
 contains .github/workflows/release.yml 'NET_PROBE_RELEASE_SIGNING_KEY_B64: ${{ secrets.NET_PROBE_RELEASE_SIGNING_KEY_B64 }}'
@@ -28,6 +28,15 @@ contains .github/workflows/release.yml "go run ./cmd/net-probe-release -print-pu
 contains .github/workflows/release.yml "-X main.releasePublicKeyHex="
 contains .github/workflows/release.yml "net-probe_linux_amd64.manifest.json"
 contains .github/workflows/release.yml "net-probe_linux_amd64.manifest.sig"
+contains .github/workflows/release.yml "bash tests/control-e2e.sh"
+contains .github/workflows/release.yml "bash tests/capacity-control.sh"
+contains .github/workflows/release.yml "bash tests/agent-size.sh"
+contains .github/workflows/release.yml "bash tests/agent-resource.sh"
+contains .github/workflows/release.yml "bash tests/secret-scan.sh"
+contains .github/workflows/release.yml "-gcflags=all=-l"
+contains tests/agent-size.sh 'candidate_size" -gt 7000000'
+contains tests/agent-size.sh 'gzip_size" -gt 3000000'
+contains tests/agent-size.sh 'growth" -gt 500000'
 
 publish_files="$(awk '
   /^[[:space:]]*- name: Publish release$/ { in_publish = 1; next }
@@ -43,12 +52,18 @@ publish_files="$(awk '
 for artifact in \
   net-probe_linux_amd64 \
   net-probe_linux_arm64 \
+  net-probe-update-helper_linux_amd64 \
+  net-probe-update-helper_linux_arm64 \
   net-probe-panel_linux_amd64 \
   net-probe-panel_linux_arm64 \
   net-probe_linux_amd64.manifest.json \
   net-probe_linux_amd64.manifest.sig \
   net-probe_linux_arm64.manifest.json \
   net-probe_linux_arm64.manifest.sig \
+  net-probe-update-helper_linux_amd64.manifest.json \
+  net-probe-update-helper_linux_amd64.manifest.sig \
+  net-probe-update-helper_linux_arm64.manifest.json \
+  net-probe-update-helper_linux_arm64.manifest.sig \
   SHA256SUMS; do
   grep -Fxq -- "$artifact" <<<"$publish_files" || fail "release upload missing: $artifact"
 done
