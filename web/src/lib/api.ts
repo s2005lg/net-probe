@@ -101,7 +101,7 @@ export interface Service {
   enabled: boolean;
   main_pid?: number;
   n_restarts?: number;
-  listen: Listen[];
+  listen: Listen[] | null;
   listen_ok: boolean;
   cert?: Cert | null;
   stats?: ServiceStats | null;
