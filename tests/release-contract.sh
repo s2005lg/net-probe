@@ -17,6 +17,10 @@ contains README.md "NET_PROBE_PANEL_VERSION=v0.1.0"
 contains .github/workflows/release.yml "sha256sum net-probe_linux_amd64 net-probe_linux_arm64 net-probe-update-helper_linux_amd64 net-probe-update-helper_linux_arm64 net-probe-panel_linux_amd64 net-probe-panel_linux_arm64 > SHA256SUMS"
 contains .github/workflows/release.yml "sha256sum --check SHA256SUMS"
 contains .github/workflows/release.yml "npm run verify"
+contains .github/workflows/release.yml "workflow_dispatch:"
+contains .github/workflows/release.yml "RELEASE_TAG:"
+contains .github/workflows/release.yml "git tag \"\$RELEASE_TAG\" \"\$GITHUB_SHA\""
+contains .github/workflows/release.yml "tag_name: \${{ env.RELEASE_TAG }}"
 contains .github/workflows/release.yml 'NET_PROBE_RELEASE_SIGNING_KEY_B64: ${{ secrets.NET_PROBE_RELEASE_SIGNING_KEY_B64 }}'
 if [ "$(grep -Fc -- 'NET_PROBE_RELEASE_SIGNING_KEY_B64: ${{ secrets.NET_PROBE_RELEASE_SIGNING_KEY_B64 }}' .github/workflows/release.yml)" -ne 2 ]; then
   fail "release signing key must be scoped only to the two signing steps"

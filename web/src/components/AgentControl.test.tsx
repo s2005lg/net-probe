@@ -63,6 +63,7 @@ describe("AgentControl", () => {
     expect(html).not.toContain("重新加载配置");
     expect(html).not.toContain("运行自检");
     expect(html).not.toContain("升级 Agent");
+    expect(html).not.toContain("/agents");
   });
 
   it("keeps viewers read-only and operators away from security actions", () => {

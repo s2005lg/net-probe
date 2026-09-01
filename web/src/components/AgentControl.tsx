@@ -1,6 +1,5 @@
-import { Activity, RefreshCw, ShieldAlert, Stethoscope, UploadCloud } from "lucide-react";
+import { Activity, RefreshCw, ShieldAlert, Stethoscope } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 import {
   api,
   type AgentAction,
@@ -182,15 +181,6 @@ export default function AgentControl({
           ) : null}
           {has("self_check") ? (
             <ActionButton icon={Stethoscope} label="运行自检" busy={runningAction === "self_check"} disabled={Boolean(runningAction)} onClick={() => void execute("self_check")} />
-          ) : null}
-          {actor.role === "admin" && has("upgrade") ? (
-            <Link
-              to={`/agents?agent=${encodeURIComponent(agent.agent_id)}`}
-              className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded border border-edge px-3 py-2 text-sm text-fg transition-colors hover:border-ok focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ok"
-            >
-              <UploadCloud size={17} aria-hidden="true" />
-              升级 Agent
-            </Link>
           ) : null}
           {actor.role === "admin" ? (
             <button

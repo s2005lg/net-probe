@@ -1,6 +1,5 @@
 import {
   Bell,
-  Bot,
   GitCompareArrows,
   LayoutDashboard,
   LogOut,
@@ -13,7 +12,6 @@ import { api } from "../lib/api";
 const NAV = [
   { to: "/overview", label: "总览", icon: LayoutDashboard },
   { to: "/nodes", label: "节点", icon: Server },
-  { to: "/agents", label: "Agent", icon: Bot },
   { to: "/alerts", label: "告警", icon: Bell },
   { to: "/versions", label: "版本", icon: GitCompareArrows },
   { to: "/settings", label: "设置", icon: SettingsIcon },

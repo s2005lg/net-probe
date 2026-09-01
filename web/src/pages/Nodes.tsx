@@ -1,8 +1,9 @@
+import { Copy, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import StatusBadge from "../components/StatusBadge";
-import { api, nodeName, type Node, type Tag } from "../lib/api";
-import { formatRelative } from "../lib/format";
+import { api, nodeName, type Enrollment, type Node, type Release, type SessionUser, type Tag } from "../lib/api";
+import { formatRelative, formatTime } from "../lib/format";
 import { egressIP } from "../lib/host";
 
 const PAGE_SIZE = 10;
@@ -16,6 +17,13 @@ export default function NodesPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Node | null>(null);
+  const [actor, setActor] = useState<SessionUser | null>(null);
+  const [releases, setReleases] = useState<Release[]>([]);
+  const [addingAgent, setAddingAgent] = useState(false);
+  const [enrollment, setEnrollment] = useState<Enrollment>();
+  const [enrollmentLabel, setEnrollmentLabel] = useState("");
+  const [agentPlatform, setAgentPlatform] = useState("linux/amd64");
+  const [enrollmentBusy, setEnrollmentBusy] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [view, setView] = useState<"table" | "cards">("table");
 
@@ -26,10 +34,12 @@ export default function NodesPage() {
 
   useEffect(() => {
     let cancelled = false;
-    api.tags()
-      .then((items) => {
+    Promise.all([api.tags(), api.me(), api.releases()])
+      .then(([items, me, releaseResponse]) => {
         if (!cancelled) {
           setTags(items);
+          setActor(me);
+          setReleases(releaseResponse.items);
           setTagsLoaded(true);
         }
       })
@@ -105,11 +115,38 @@ export default function NodesPage() {
     }
   }
 
+  async function createEnrollment() {
+    setEnrollmentBusy(true);
+    setError("");
+    try {
+      setEnrollment(await api.createEnrollment(enrollmentLabel.trim()));
+      setAddingAgent(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setEnrollmentBusy(false);
+    }
+  }
+
   if (error) return <p className="text-danger">{error}</p>;
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3">
+        <AddAgentPanel
+          actor={actor}
+          releases={releases}
+          enrollment={enrollment}
+          label={enrollmentLabel}
+          platform={agentPlatform}
+          open={addingAgent}
+          busy={enrollmentBusy}
+          onOpen={() => setAddingAgent(true)}
+          onClose={() => setAddingAgent(false)}
+          onLabelChange={setEnrollmentLabel}
+          onPlatformChange={setAgentPlatform}
+          onCreate={() => void createEnrollment()}
+        />
         <input
           value={q}
           onChange={(e) => setParam("q", e.target.value)}
@@ -390,6 +427,134 @@ function NodeEditModal({
       </div>
     </div>
   );
+}
+
+export function AddAgentPanel({
+  actor,
+  releases = [],
+  enrollment,
+  label = "",
+  platform = "linux/amd64",
+  open = false,
+  busy = false,
+  panelOrigin = typeof window === "undefined" ? "https://panel.example.invalid" : window.location.origin,
+  onOpen,
+  onClose,
+  onLabelChange,
+  onPlatformChange,
+  onCreate,
+}: {
+  actor: SessionUser | null;
+  releases?: Release[];
+  enrollment?: Enrollment;
+  label?: string;
+  platform?: string;
+  open?: boolean;
+  busy?: boolean;
+  panelOrigin?: string;
+  onOpen?: () => void;
+  onClose?: () => void;
+  onLabelChange?: (value: string) => void;
+  onPlatformChange?: (value: string) => void;
+  onCreate?: () => void;
+}) {
+  if (actor?.role !== "admin") return null;
+  const [os, arch] = platform.split("/");
+  const release = releases.find((item) => item.manifest.os === os && item.manifest.arch === arch);
+  const version = release?.manifest.version ?? "<release-tag>";
+  const command = enrollment ? buildInstallCommand(panelOrigin, version, enrollment) : "";
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={onOpen}
+        className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded bg-ok px-3 py-2 text-sm font-medium text-surface transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ok"
+      >
+        <Plus size={16} aria-hidden="true" />
+        添加 Agent
+      </button>
+      {open || enrollment ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-2xl rounded border border-edge bg-panel p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="font-head text-lg text-fg">添加 Agent</h2>
+                <p className="mt-1 text-sm text-muted">生成一条命令，在新 VPS 的 root shell 执行。</p>
+              </div>
+              <button type="button" onClick={onClose} className="rounded border border-edge px-3 py-1.5 text-sm text-muted hover:text-fg">
+                关闭
+              </button>
+            </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_180px_auto]">
+              <label className="text-sm text-muted">
+                标签（可选）
+                <input
+                  value={label}
+                  maxLength={256}
+                  onChange={(event) => onLabelChange?.(event.target.value)}
+                  className="mt-1 min-h-11 w-full rounded border border-edge bg-surface px-3 py-2 text-fg outline-none focus-visible:ring-2 focus-visible:ring-ok"
+                />
+              </label>
+              <label className="text-sm text-muted">
+                平台
+                <select
+                  value={platform}
+                  onChange={(event) => onPlatformChange?.(event.target.value)}
+                  className="mt-1 min-h-11 w-full rounded border border-edge bg-surface px-3 py-2 text-fg outline-none focus-visible:ring-2 focus-visible:ring-ok"
+                >
+                  <option value="linux/amd64">linux/amd64</option>
+                  <option value="linux/arm64">linux/arm64</option>
+                </select>
+              </label>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={onCreate}
+                className="min-h-11 cursor-pointer self-end rounded bg-ok px-4 py-2 text-sm font-medium text-surface hover:opacity-90 disabled:cursor-wait disabled:opacity-50"
+              >
+                {busy ? "生成中…" : "生成安装命令"}
+              </button>
+            </div>
+            {!release ? (
+              <p className="mt-3 text-sm text-warn">尚未导入签名发布；生成命令后请把版本占位符替换为已发布 tag。</p>
+            ) : null}
+            {enrollment ? (
+              <div className="mt-4">
+                <p className="text-sm text-ok">有效至 {formatTime(enrollment.expires_at)}</p>
+                <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-all rounded bg-surface p-3 font-head text-xs leading-5 text-fg">{command}</pre>
+                <button
+                  type="button"
+                  onClick={() => void navigator.clipboard?.writeText(command)}
+                  className="mt-2 inline-flex min-h-11 cursor-pointer items-center gap-2 rounded border border-edge px-3 py-2 text-sm text-fg hover:border-ok focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ok"
+                >
+                  <Copy size={16} aria-hidden="true" />
+                  复制安装命令
+                </button>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function buildInstallCommand(origin: string, version: string, enrollment: Enrollment): string {
+  const releaseTag = /^v\d+\.\d+\.\d+$/.test(version) ? version : "<release-tag>";
+  return [
+    `curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/${releaseTag}/install.sh | env \\`,
+    `  NET_PROBE_PANEL_URL=${shellQuote(origin)} \\`,
+    `  NET_PROBE_VERSION=${shellQuote(version)} \\`,
+    `  NET_PROBE_CA_FINGERPRINT=${shellQuote(enrollment.ca_fingerprint)} \\`,
+    `  NET_PROBE_ENROLLMENT_CODE=${shellQuote(enrollment.code)} \\`,
+    `  NET_PROBE_RELEASE_PUBLIC_KEY_HEX=${shellQuote(enrollment.release_public_key_hex)} \\`,
+    "  bash",
+  ].join("\n");
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
 function NodeActions({
