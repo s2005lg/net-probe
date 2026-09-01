@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -37,10 +38,30 @@ func TestNewSession(t *testing.T) {
 	}
 
 	var userID int64
-	if err := d.QueryRow(`SELECT user_id FROM sessions WHERE token=?`, token).Scan(&userID); err != nil {
+	var sessionID string
+	if err := d.QueryRow(`SELECT user_id,session_id FROM sessions WHERE token=?`, token).Scan(&userID, &sessionID); err != nil {
 		t.Fatalf("query session: %v", err)
 	}
 	if userID != 7 {
 		t.Fatalf("user id = %d", userID)
+	}
+	if sessionID == "" || sessionID == token {
+		t.Fatalf("session id=%q", sessionID)
+	}
+}
+
+func TestRequireRole(t *testing.T) {
+	if !errors.Is(Require(Actor{Role: Viewer}, Operator), ErrForbidden) {
+		t.Fatal("viewer elevated")
+	}
+	if err := Require(Actor{Role: Admin}, Operator); err != nil {
+		t.Fatalf("admin denied operator access: %v", err)
+	}
+	admin := Actor{Role: Admin, ReauthenticatedAt: time.Now()}
+	if err := RequireRecentReauth(admin, 10*time.Minute); err != nil {
+		t.Fatalf("fresh admin rejected: %v", err)
+	}
+	if !errors.Is(RequireRecentReauth(Actor{Role: Admin}, 10*time.Minute), ErrReauthenticationRequired) {
+		t.Fatal("missing reauthentication accepted")
 	}
 }

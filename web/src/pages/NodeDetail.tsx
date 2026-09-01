@@ -13,8 +13,17 @@ import {
   YAxis,
 } from "recharts";
 import StatusBadge from "../components/StatusBadge";
+import AgentControl from "../components/AgentControl";
 import ServiceCard from "../components/ServiceCard";
-import { api, nodeName, type Alert, type Metric, type Node } from "../lib/api";
+import {
+  agentFromNode,
+  api,
+  nodeName,
+  type Alert,
+  type Metric,
+  type Node,
+  type SessionUser,
+} from "../lib/api";
 import {
   formatBytes,
   formatClock,
@@ -37,6 +46,7 @@ export default function NodeDetailPage() {
   const [node, setNode] = useState<Node | null>(null);
   const [metrics, setMetrics] = useState<Metric[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [actor, setActor] = useState<SessionUser | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -45,15 +55,17 @@ export default function NodeDetailPage() {
     let cancelled = false;
     async function load(initial: boolean) {
       try {
-        const [n, m, a] = await Promise.all([
+        const [n, m, a, currentActor] = await Promise.all([
           api.node(id),
           api.nodeMetrics(id),
           api.alerts(undefined, id),
+          initial ? api.me() : Promise.resolve(null),
         ]);
         if (cancelled) return;
         setNode(n);
         setMetrics(m);
         setAlerts(a);
+        if (currentActor) setActor(currentActor);
         if (initial) setError("");
       } catch (e) {
         if (cancelled) return;
@@ -74,6 +86,7 @@ export default function NodeDetailPage() {
   if (!node) return <p className="text-muted">加载中…</p>;
 
   const { host } = node;
+  const agent = agentFromNode(node);
   const trafficSummary = aggregateTraffic(metrics);
 
   const rangeLabel =
@@ -101,6 +114,21 @@ export default function NodeDetailPage() {
         <InfoCard label="国家/地区" value={node.ip_location || "—"} />
         <InfoCard label="运行时长" value={formatUptime(host.uptime_seconds)} />
       </div>
+
+      {agent && actor ? (
+        <AgentControl
+          agent={agent}
+          actor={actor}
+          onRevoked={() =>
+            setNode((current) => current ? {
+              ...current,
+              agent_id: "",
+              control_status: "offline",
+              agent_capabilities: [],
+            } : current)
+          }
+        />
+      ) : null}
 
       <section className="rounded border border-edge bg-panel p-4">
         <h2 className="mb-3 font-head text-fg">服务</h2>

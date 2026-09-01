@@ -5,8 +5,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v5
-        with: { go-version: '1.23' }
+        with: { go-version: '1.25' }
       - uses: actions/setup-node@v4
         with: { node-version: '20' }
       - name: Check shell syntax
@@ -19,6 +21,18 @@ jobs:
         run: sudo env GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_OS="$RUNNER_OS" NET_PROBE_INSTALLER_SMOKE=1 bash tests/installers-smoke.sh
       - name: Verify frontend
         run: cd web && npm ci && npm run verify
+      - name: Verify control plane
+        run: bash tests/control-e2e.sh
+      - name: Verify race-sensitive control code
+        run: go test -race ./internal/agent ./internal/panel/control
+      - name: Verify Agent size budget
+        run: bash tests/agent-size.sh
+      - name: Smoke test Agent resource harness
+        env:
+          NET_PROBE_RESOURCE_SMOKE: "1"
+        run: bash tests/agent-resource.sh
+      - name: Scan tracked sources for secrets
+        run: bash tests/secret-scan.sh
       - run: go test ./...
       - run: go vet ./...
       - run: go build ./...

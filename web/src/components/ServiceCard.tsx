@@ -33,7 +33,7 @@ export default function ServiceCard({ service }: { service: Service }) {
       </div>
       <dl className="mt-2 space-y-1 text-sm text-muted">
         <Row label="版本" value={service.version || "—"} />
-        <Row label="端口" value={service.listen.map((listen) => listen.port).join(", ") || "—"} />
+        <Row label="端口" value={(service.listen ?? []).map((listen) => listen.port).join(", ") || "—"} />
         <Row label="证书" value={service.cert ? `${service.cert.days_left} 天` : "—"} />
         <MetricRow label="流量" metric={traffic} value={trafficValue(traffic)} />
         <MetricRow label="在线连接" metric={onlineClients} value={onlineClientsValue(onlineClients)} />

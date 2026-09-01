@@ -13,121 +13,262 @@ case "$arch" in
   *) echo "unsupported arch: $arch" >&2; exit 1 ;;
 esac
 
-version="${NET_PROBE_VERSION:-latest}"
-if [ "$version" = "latest" ]; then
-  base="https://github.com/s2005lg/net-probe/releases/latest/download"
-else
-  base="https://github.com/s2005lg/net-probe/releases/download/${version}"
+version="${NET_PROBE_VERSION:-}"
+if [ -z "$version" ] || [ "$version" = "latest" ]; then
+  echo "NET_PROBE_VERSION must name the explicit signed release (for example v1.2.3); latest is refused to prevent replay" >&2
+  exit 1
 fi
+release_public_key_hex="${NET_PROBE_RELEASE_PUBLIC_KEY_HEX:-}"
+if [ "${#release_public_key_hex}" -ne 64 ]; then
+  echo "NET_PROBE_RELEASE_PUBLIC_KEY_HEX must be the trusted 32-byte lowercase Ed25519 public key" >&2
+  exit 1
+fi
+case "$release_public_key_hex" in
+  *[!0-9a-f]*) echo "NET_PROBE_RELEASE_PUBLIC_KEY_HEX must be lowercase hexadecimal" >&2; exit 1 ;;
+esac
+base="https://github.com/s2005lg/net-probe/releases/download/${version}"
 
-curl -fsSL "${base}/net-probe_linux_${arch}" -o /usr/local/bin/net-probe
-chmod 755 /usr/local/bin/net-probe
+for required_command in curl openssl python3 base64 sha256sum stat; do
+  command -v "$required_command" >/dev/null 2>&1 || { echo "missing required command: $required_command" >&2; exit 1; }
+done
+openssl version | grep -Eq '^OpenSSL (3|[4-9])\.' || { echo "OpenSSL 3.0 or newer is required for Ed25519 verification" >&2; exit 1; }
+staging_dir="$(mktemp -d /tmp/net-probe-install.XXXXXX)"
+trap 'rm -rf "$staging_dir"' EXIT
+public_key_path="$staging_dir/release-public.der"
+download_path="$staging_dir/net-probe"
+helper_download_path="$staging_dir/net-probe-update-helper"
+python3 - "$release_public_key_hex" "$public_key_path" <<'PY'
+import pathlib, sys
+key = bytes.fromhex(sys.argv[1])
+if len(key) != 32:
+    raise SystemExit("invalid release public key")
+pathlib.Path(sys.argv[2]).write_bytes(bytes.fromhex("302a300506032b6570032100") + key)
+PY
 
+verify_release_artifact() {
+  local asset="$1"
+  local output="$2"
+  local max_size="$3"
+  local manifest_path="$staging_dir/${asset}.manifest.json"
+  local signature_text_path="$staging_dir/${asset}.manifest.sig.b64"
+  local signature_path="$staging_dir/${asset}.manifest.sig"
+  local manifest_fields=()
+  curl --proto '=https' --proto-redir '=https' -fLsS "${base}/${asset}.manifest.json" -o "$manifest_path"
+  curl --proto '=https' --proto-redir '=https' -fLsS "${base}/${asset}.manifest.sig" -o "$signature_text_path"
+  python3 - "$manifest_path" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+body = path.read_bytes()
+if not body.endswith(b"\n") or body[:-1].strip() != body[:-1]:
+    raise SystemExit("release manifest encoding is invalid")
+path.write_bytes(body[:-1])
+PY
+  base64 --decode < "$signature_text_path" > "$signature_path"
+  openssl pkeyutl -verify -pubin -inkey "$public_key_path" -keyform DER -rawin -in "$manifest_path" -sigfile "$signature_path" >/dev/null
+  mapfile -t manifest_fields < <(python3 - "$manifest_path" "$arch" "$asset" "$max_size" <<'PY'
+import json, pathlib, re, sys, time, urllib.parse
+raw = pathlib.Path(sys.argv[1]).read_bytes()
+manifest = json.loads(raw)
+expected = {"version","os","arch","byte_size","sha256","artifact_url","minimum_panel_version","control_version","issued_at","expires_at"}
+if set(manifest) != expected or manifest["os"] != "linux" or manifest["arch"] != sys.argv[2]:
+    raise SystemExit("release manifest platform/schema mismatch")
+if not re.fullmatch(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", manifest["version"]):
+    raise SystemExit("release manifest version is invalid")
+if not isinstance(manifest["byte_size"], int) or not 0 < manifest["byte_size"] <= int(sys.argv[4]):
+    raise SystemExit("release manifest size is invalid")
+if not re.fullmatch(r"[0-9a-f]{64}", manifest["sha256"]):
+    raise SystemExit("release manifest hash is invalid")
+if manifest["control_version"] != "1" or not isinstance(manifest["issued_at"], int) or not isinstance(manifest["expires_at"], int):
+    raise SystemExit("release manifest time/control fields are invalid")
+if manifest["expires_at"] <= manifest["issued_at"] or manifest["expires_at"] - manifest["issued_at"] > 24 * 60 * 60:
+    raise SystemExit("release manifest validity interval is invalid")
+if manifest["issued_at"] > int(time.time()) + 5 * 60:
+    raise SystemExit("release manifest was issued in the future")
+url = urllib.parse.urlsplit(manifest["artifact_url"])
+expected_path = f"/s2005lg/net-probe/releases/download/{manifest['version']}/{sys.argv[3]}"
+if url.scheme != "https" or url.netloc != "github.com" or url.path != expected_path or url.query or url.fragment:
+    raise SystemExit("release artifact URL is invalid")
+print(manifest["version"])
+print(manifest["byte_size"])
+print(manifest["sha256"])
+print(manifest["artifact_url"])
+PY
+  )
+  [ "${#manifest_fields[@]}" -eq 4 ] || { echo "$asset manifest validation failed" >&2; exit 1; }
+  [ "${manifest_fields[0]}" = "$version" ] || { echo "$asset manifest version mismatch" >&2; exit 1; }
+  curl --proto '=https' --proto-redir '=https' -fLsS "${manifest_fields[3]}" -o "$output"
+  [ "$(stat -c '%s' "$output")" = "${manifest_fields[1]}" ] || { echo "$asset size verification failed" >&2; exit 1; }
+  printf '%s  %s\n' "${manifest_fields[2]}" "$output" | sha256sum --check --status || { echo "$asset SHA-256 verification failed" >&2; exit 1; }
+  chmod 0755 "$output"
+}
+
+verify_release_artifact "net-probe_linux_${arch}" "$download_path" "$((32 * 1024 * 1024))"
+verify_release_artifact "net-probe-update-helper_linux_${arch}" "$helper_download_path" "$((32 * 1024 * 1024))"
+resolved_version="$version"
 if ! id net-probe >/dev/null 2>&1; then
   useradd --system --no-create-home --shell /usr/sbin/nologin net-probe
 fi
-
-install -d -m 0755 /etc/net-probe/services.d
-
-# Resolve panel URL and token.
-# Order: environment variables -> same-host panel config -> interactive prompt.
+chmod 0755 "$staging_dir"
 panel_url="${NET_PROBE_PANEL_URL:-}"
-panel_token="${NET_PROBE_PANEL_TOKEN:-}"
+ca_fingerprint="${NET_PROBE_CA_FINGERPRINT:-}"
+enrollment_code="${NET_PROBE_ENROLLMENT_CODE:-}"
+node_id="${NET_PROBE_NODE_ID:-$(hostname)}"
+python3 - "$panel_url" "$ca_fingerprint" "$enrollment_code" "$node_id" <<'PY'
+import re, sys, urllib.parse
+panel_url, fingerprint, code, node_id = sys.argv[1:]
+url = urllib.parse.urlsplit(panel_url)
+if url.scheme != "https" or not url.hostname or url.username or url.password or url.query or url.fragment:
+    raise SystemExit("NET_PROBE_PANEL_URL must be a secure HTTPS origin")
+if not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
+    raise SystemExit("NET_PROBE_CA_FINGERPRINT must be 64 lowercase hexadecimal characters")
+if not code or len(code) > 4096:
+    raise SystemExit("NET_PROBE_ENROLLMENT_CODE is required")
+if not node_id or len(node_id) > 128 or any(ch in node_id for ch in "\r\n\x00"):
+    raise SystemExit("NET_PROBE_NODE_ID is invalid")
+PY
+for required_command in runuser hostname; do
+  command -v "$required_command" >/dev/null 2>&1 || { echo "missing required command: $required_command" >&2; exit 1; }
+done
 
-# Same-host auto-discovery: read the local panel config if present.
-if [ -z "$panel_url" ] && [ -r /etc/net-probe-panel/config.toml ]; then
-  local_listen="$(sed -n 's/^listen_addr[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' /etc/net-probe-panel/config.toml | head -n1)"
-  local_port="${local_listen##*:}"
-  case "$local_port" in
-    ''|*[!0-9]*) local_port="" ;;
-  esac
-  local_token="$(sed -n '/^\[agent\]/,/^\[/s/^token[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' /etc/net-probe-panel/config.toml | head -n1)"
-  if [ -n "$local_port" ] && [ -n "$local_token" ]; then
-    panel_url="https://127.0.0.1:${local_port}"
-    panel_token="$local_token"
-    echo "auto-detected local panel: ${panel_url}"
-  fi
-fi
+stage_config_home="$staging_dir/config"
+stage_state_home="$staging_dir/state"
+stage_agent_dir="$stage_config_home/net-probe"
+stage_pki_dir="$stage_agent_dir/pki"
+install -d -o net-probe -g net-probe -m 0700 "$stage_config_home" "$stage_state_home" "$stage_agent_dir" "$stage_pki_dir"
+render_config() {
+  python3 - "$1" "$2" "$panel_url" "$node_id" <<'PY'
+import json, pathlib, sys
+target, pki_dir, panel_url, node_id = sys.argv[1:]
+q = json.dumps
+body = f'''[agent]
+node_id = {q(node_id)}
+log_level = "info"
+report_interval = "60s"
+collect_timeout = "45s"
+shutdown_timeout = "20s"
 
-ask() {
-  local _answer=""
-  if [ -t 1 ] && [ -e /dev/tty ]; then
-    printf '%s' "$1" >/dev/tty 2>/dev/null || true
-    IFS= read -r _answer </dev/tty 2>/dev/null || true
-  fi
-  printf '%s\n' "$_answer"
+[panel]
+url = {q(panel_url)}
+ca_file = {q(pki_dir + "/ca.crt")}
+cert_file = {q(pki_dir + "/agent.crt")}
+key_file = {q(pki_dir + "/agent.key")}
+command_key_file = {q(pki_dir + "/command-signing.pub")}
+release_key_file = {q(pki_dir + "/release-signing.pub")}
+
+[collect]
+disk_mounts = ["/"]
+upgradable = true
+'''
+pathlib.Path(target).write_text(body)
+PY
 }
+render_config "$stage_agent_dir/config.toml" "$stage_pki_dir"
+chown net-probe:net-probe "$stage_agent_dir/config.toml"
+chmod 0600 "$stage_agent_dir/config.toml"
+printf '%s\n' "$enrollment_code" | runuser -u net-probe -- env XDG_CONFIG_HOME="$stage_config_home" XDG_STATE_HOME="$stage_state_home" \
+  "$download_path" enroll --panel-url "$panel_url" --ca-fingerprint "$ca_fingerprint" --code-stdin >/dev/null
+runuser -u net-probe -- env XDG_CONFIG_HOME="$stage_config_home" XDG_STATE_HOME="$stage_state_home" \
+  "$download_path" --config "$stage_agent_dir/config.toml" --preflight >/dev/null
 
-# Interactive fallback (reads from /dev/tty because `curl | bash` uses stdin).
-if [ -z "$panel_url" ]; then
-  panel_url="$(ask 'panel URL (https://host:port): ')"
-fi
-if [ -n "$panel_url" ] && [ -z "$panel_token" ]; then
-  panel_token="$(ask 'panel agent token: ')"
-fi
-
-if [ -n "$panel_url" ]; then
-  {
-    echo '[[sink]]'
-    echo 'type = "panel"'
-    echo "url = \"${panel_url}\""
-    if [ "${NET_PROBE_PANEL_TLS_SKIP_VERIFY:-1}" != "0" ]; then
-      echo 'tls_skip_verify = true'
-    fi
-    if [ -n "$panel_token" ]; then
-      install -d -m 0755 /etc/net-probe
-      printf '%s\n' "$panel_token" > /etc/net-probe/panel-token
-      chmod 600 /etc/net-probe/panel-token
-      chown net-probe:net-probe /etc/net-probe/panel-token
-      echo 'token_file = "/etc/net-probe/panel-token"'
-    fi
-  } > /etc/net-probe/config.toml
-  chmod 600 /etc/net-probe/config.toml
-  chown net-probe:net-probe /etc/net-probe/config.toml
-  if [ -z "$panel_token" ]; then
-    echo "warning: panel token not set; reports will be rejected (401) until /etc/net-probe/panel-token is configured" >&2
-  fi
-else
-  cat > /etc/net-probe/config.toml <<'EOF'
-[[sink]]
-type = "webhook"
-url = "https://example.com/net-probe-report"
-EOF
-  chmod 600 /etc/net-probe/config.toml
-  chown net-probe:net-probe /etc/net-probe/config.toml
-  echo "warning: no panel configured; wrote a placeholder webhook sink to /etc/net-probe/config.toml" >&2
-  echo "         edit it or re-run with NET_PROBE_PANEL_URL / NET_PROBE_PANEL_TOKEN" >&2
-fi
+version_dir="/opt/net-probe/versions/${resolved_version}"
+install -d -o root -g root -m 0755 /opt/net-probe/versions "$version_dir"
+install -o root -g root -m 0755 "$download_path" "$version_dir/net-probe"
+install -d -o root -g root -m 0755 /usr/local/libexec
+install -o root -g root -m 0755 "$helper_download_path" /usr/local/libexec/net-probe-update-helper
+install -d -o root -g root -m 0755 /etc/net-probe /etc/net-probe/services.d /etc/net-probe/trust
+install -d -o net-probe -g net-probe -m 0700 /etc/net-probe/pki
+for identity_file in agent.key agent.crt ca.crt command-signing.pub release-signing.pub identity.json; do
+  install -o net-probe -g net-probe -m 0600 "$stage_pki_dir/$identity_file" "/etc/net-probe/pki/$identity_file"
+done
+install -o root -g root -m 0644 "$stage_pki_dir/command-signing.pub" /etc/net-probe/trust/command-signing.pub
+render_config "$staging_dir/config.toml" /etc/net-probe/pki
+install -o net-probe -g net-probe -m 0600 "$staging_dir/config.toml" /etc/net-probe/config.toml
+install -d -o root -g net-probe -m 0770 /var/lib/net-probe-updates
+ln -sfn "$version_dir/net-probe" /usr/local/bin/net-probe
 
 cat > /etc/systemd/system/net-probe.service <<'EOF'
 [Unit]
 Description=net-probe agent
 After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+User=net-probe
+Group=net-probe
+ExecStart=/usr/local/bin/net-probe --config /etc/net-probe/config.toml
+Restart=on-failure
+RestartSec=5s
+WatchdogSec=90s
+TimeoutStartSec=30s
+TimeoutStopSec=30s
+StateDirectory=net-probe
+StateDirectoryMode=0700
+RuntimeDirectory=net-probe
+RuntimeDirectoryMode=0750
+Environment=NET_PROBE_UPDATE_DIRECTORY=/var/lib/net-probe-updates
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ReadWritePaths=/etc/net-probe/pki /var/lib/net-probe-updates
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat > /etc/systemd/system/net-probe-update.path <<'EOF'
+[Unit]
+Description=Watch for a verified net-probe Agent update request
+
+[Path]
+PathExists=/var/lib/net-probe-updates/pending.json
+PathExists=/var/lib/net-probe-updates/claimed.json
+Unit=net-probe-update.service
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat > /etc/systemd/system/net-probe-update.service <<'EOF'
+[Unit]
+Description=Install and prove a verified net-probe Agent update
+After=net-probe.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/net-probe --config /etc/net-probe/config.toml
-NoNewPrivileges=true
+User=root
+Group=root
+ExecStart=/usr/local/libexec/net-probe-update-helper
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
 ProtectSystem=strict
-ReadWritePaths=/etc/net-probe
-EOF
-
-cat > /etc/systemd/system/net-probe.timer <<'EOF'
-[Unit]
-Description=Run net-probe periodically
-
-[Timer]
-OnBootSec=1min
-OnUnitActiveSec=1min
-AccuracySec=5s
-
-[Install]
-WantedBy=timers.target
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+ReadWritePaths=/var/lib/net-probe-updates /opt/net-probe/versions /usr/local/bin /run/net-probe
 EOF
 
 systemctl daemon-reload
-systemctl enable --now net-probe.timer
+systemctl disable --now net-probe.timer >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/net-probe.timer
+systemctl enable --now net-probe.service
+systemctl enable --now net-probe-update.path
+for _attempt in $(seq 1 30); do
+  if systemctl is-active --quiet net-probe.service; then
+    break
+  fi
+  sleep 1
+done
+systemctl is-active --quiet net-probe.service || { echo "net-probe Agent did not become ready" >&2; exit 1; }
 
-echo "installed net-probe ${version} for ${arch}"
+echo "installed net-probe ${resolved_version} for ${arch}"
 echo "config: /etc/net-probe/config.toml"
-echo "reload after config changes: systemctl restart net-probe.timer"
+echo "reload after config changes: systemctl restart net-probe.service"

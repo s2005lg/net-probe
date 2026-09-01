@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/s2005lg/net-probe/internal/collect"
 	"github.com/s2005lg/net-probe/internal/config"
+	"github.com/s2005lg/net-probe/internal/controlproto"
 	"github.com/s2005lg/net-probe/internal/detect"
 	"github.com/s2005lg/net-probe/internal/egressip"
 	"github.com/s2005lg/net-probe/internal/logx"
@@ -150,6 +152,27 @@ func Run(ctx context.Context, cfg *config.Config, version string, runner detect.
 		return 2
 	}
 	rc := 0
+	if cfg.Panel.URL != "" {
+		identity, err := LoadIdentity(cfg.Panel.URL, filepath.Dir(cfg.Panel.CAFile))
+		if err != nil {
+			logger.Errorf("load Panel identity: %v", err)
+			rc = 1
+		} else if err := RenewIfNeeded(ctx, identity, time.Now()); err != nil {
+			logger.Errorf("renew Panel identity: %v", err)
+			rc = 1
+		} else {
+			panelSink, err := sink.NewPanel(cfg.Panel.URL, identity.TLSConfig)
+			if err != nil {
+				logger.Errorf("init Panel sink: %v", err)
+				rc = 1
+			} else if err := sendWithRetry(ctx, panelSink, body); err != nil {
+				logger.Errorf("Panel sink failed: %v", err)
+				rc = 1
+			} else {
+				logger.Debugf("Panel sink ok")
+			}
+		}
+	}
 	for _, sc := range cfg.Sinks {
 		s, err := sink.New(sc, rep.NodeID)
 		if err != nil {
@@ -165,6 +188,59 @@ func Run(ctx context.Context, cfg *config.Config, version string, runner detect.
 		}
 	}
 	return rc
+}
+
+// Preflight validates the complete Panel migration path without starting a
+// resident scheduler or changing any production paths. A successful return
+// proves an acknowledged mTLS report and an authenticated control-v1 welcome.
+func Preflight(ctx context.Context, cfg *config.Config, version string, runner detect.Runner) error {
+	collectTimeout, err := time.ParseDuration(cfg.Agent.CollectTimeout)
+	if err != nil || collectTimeout <= 0 {
+		return errors.New("invalid preflight collection timeout")
+	}
+	collectContext, cancelCollect := context.WithTimeout(ctx, collectTimeout)
+	start := time.Now()
+	rep, err := build(collectContext, cfg, version, runner, nil)
+	cancelCollect()
+	if err != nil {
+		return fmt.Errorf("build preflight report: %w", err)
+	}
+	rep.CollectMS = time.Since(start).Milliseconds()
+	body, err := json.Marshal(rep)
+	if err != nil {
+		return fmt.Errorf("encode preflight report: %w", err)
+	}
+	identity, err := LoadIdentity(cfg.Panel.URL, filepath.Dir(cfg.Panel.CAFile))
+	if err != nil {
+		return fmt.Errorf("load preflight identity: %w", err)
+	}
+	if err := RenewIfNeeded(ctx, identity, time.Now()); err != nil {
+		return fmt.Errorf("renew preflight identity: %w", err)
+	}
+	panelSink, err := sink.NewPanel(cfg.Panel.URL, identity.TLSConfig)
+	if err != nil {
+		return fmt.Errorf("initialize preflight Panel sink: %w", err)
+	}
+	if err := sendWithRetry(ctx, panelSink, body); err != nil {
+		return fmt.Errorf("Panel did not acknowledge preflight report: %w", err)
+	}
+	capabilities := []controlproto.Action{controlproto.CollectNow, controlproto.ReloadConfig, controlproto.SelfCheck}
+	if cfg.Collect.Upgradable {
+		capabilities = append(capabilities, controlproto.Upgrade)
+	}
+	control, err := NewControlClient(ControlOptions{
+		PanelURL: cfg.Panel.URL, Identity: identity, NodeID: NodeID(cfg), Version: version,
+		Capabilities: capabilities,
+	})
+	if err != nil {
+		return fmt.Errorf("initialize preflight control: %w", err)
+	}
+	controlContext, cancelControl := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelControl()
+	if err := control.Probe(controlContext); err != nil {
+		return fmt.Errorf("control-v1 preflight failed: %w", err)
+	}
+	return nil
 }
 
 func sendWithRetry(ctx context.Context, s sink.Sink, body []byte) error {

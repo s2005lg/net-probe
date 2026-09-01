@@ -56,6 +56,14 @@ function zeroHysteriaFixture(): Service {
 }
 
 describe("ServiceCard", () => {
+  it("renders an empty port value when the API returns a null listen list", () => {
+    const service = serviceFixture({ listen: null });
+
+    const html = renderToStaticMarkup(<ServiceCard service={service} />);
+
+    expect(html).toContain('<dt>端口</dt><dd class="text-right text-fg">—</dd>');
+  });
+
   it("renders VLESS on the host service without a duplicate service", () => {
     const html = renderToStaticMarkup(
       <ServiceCard service={xrayFixture({ protocols: { state: "ok", items: ["vless"], source: "config" } })} />,

@@ -43,6 +43,36 @@ func TestNodesList(t *testing.T) {
 	}
 }
 
+func TestNodeDetailSeparatesReportAndControlPresence(t *testing.T) {
+	d, cfg := openTestDB(t)
+	now := time.Now()
+	insertTestNode(t, d, "n1", "edge", `{"hostname":"h1"}`, `[]`, now.Add(-10*time.Minute).Unix())
+	s := New(d, cfg)
+	manager := configureAgentServer(t, s)
+	agent := registerAgent(t, s, manager, authAgentID, "n1", now)
+	if _, err := d.Exec(`UPDATE agent_identities SET last_heartbeat_at=?,agent_version='v1.2.3',os='linux',arch='amd64',capabilities_json='["collect_now"]' WHERE agent_id=?`, now.Unix(), agent.identity.AgentID); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/nodes/n1", nil)
+	req.SetPathValue("id", "n1")
+	rr := httptest.NewRecorder()
+	s.handleNodeDetail(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var out map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out["status"] != "offline" || out["control_status"] != "online" || out["agent_id"] != authAgentID || out["agent_version"] != "v1.2.3" || out["agent_os"] != "linux" {
+		t.Fatalf("presence=%+v", out)
+	}
+	capabilities, ok := out["agent_capabilities"].([]any)
+	if !ok || len(capabilities) != 1 || capabilities[0] != "collect_now" {
+		t.Fatalf("capabilities=%#v", out["agent_capabilities"])
+	}
+}
+
 func TestNodeAPIEffectiveIP(t *testing.T) {
 	tests := []struct {
 		name     string

@@ -1,0 +1,21 @@
+[Unit]
+Description=Install and prove a verified net-probe Agent update
+After=net-probe.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/libexec/net-probe-update-helper
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+ReadWritePaths=/var/lib/net-probe-updates /opt/net-probe/versions /usr/local/bin /run/net-probe

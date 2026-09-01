@@ -1,11 +1,30 @@
 [Unit]
 Description=net-probe agent
 After=network-online.target
+Wants=network-online.target
 
 [Service]
-Type=oneshot
+Type=notify
+NotifyAccess=main
 User=net-probe
+Group=net-probe
 ExecStart=/usr/local/bin/net-probe --config /etc/net-probe/config.toml
+Restart=on-failure
+RestartSec=5s
+WatchdogSec=90s
+TimeoutStartSec=30s
+TimeoutStopSec=30s
+StateDirectory=net-probe
+StateDirectoryMode=0700
+RuntimeDirectory=net-probe
+RuntimeDirectoryMode=0750
+Environment=NET_PROBE_UPDATE_DIRECTORY=/var/lib/net-probe-updates
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/etc/net-probe
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ReadWritePaths=/etc/net-probe/pki /var/lib/net-probe-updates
+
+[Install]
+WantedBy=multi-user.target
