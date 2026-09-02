@@ -197,11 +197,7 @@ export interface Release {
   imported_at: number;
 }
 
-export interface ReleaseImportResponse {
-  id: number;
-  manifest: ReleaseManifest;
-  signature: string;
-}
+export type ReleaseImportResponse = Release;
 
 export interface Node {
   node_id: string;
@@ -399,6 +395,11 @@ export const api = {
     request<ReleaseImportResponse>("/releases", {
       method: "POST",
       body: JSON.stringify({ manifest, signature }),
+    }),
+  importGitHubRelease: (input: { version: string; os: string; arch: string }) =>
+    request<ReleaseImportResponse>("/releases/github", {
+      method: "POST",
+      body: JSON.stringify(input),
     }),
   createUpgrades: (input: {
     version: string;

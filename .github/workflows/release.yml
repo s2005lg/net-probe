@@ -30,6 +30,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      - name: Validate release signing key
+        env:
+          NET_PROBE_RELEASE_SIGNING_KEY_B64: ${{ secrets.NET_PROBE_RELEASE_SIGNING_KEY_B64 }}
+        run: echo "RELEASE_PUBLIC_KEY_HEX=$(go run ./cmd/net-probe-release -print-public-key)" >> "$GITHUB_ENV"
       - name: Create release tag
         if: github.event_name == 'workflow_dispatch'
         run: |
@@ -39,8 +43,12 @@ jobs:
           esac
           git fetch --tags origin
           if git rev-parse -q --verify "refs/tags/$RELEASE_TAG" >/dev/null; then
-            echo "tag already exists: $RELEASE_TAG" >&2
-            exit 1
+            existing_sha="$(git rev-list -n 1 "$RELEASE_TAG")"
+            if [ "$existing_sha" != "$GITHUB_SHA" ]; then
+              echo "tag already exists on another commit: $RELEASE_TAG" >&2
+              exit 1
+            fi
+            exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -64,10 +72,6 @@ jobs:
         run: bash tests/agent-resource.sh
       - name: Scan tracked sources for secrets
         run: bash tests/secret-scan.sh
-      - name: Derive release verification key
-        env:
-          NET_PROBE_RELEASE_SIGNING_KEY_B64: ${{ secrets.NET_PROBE_RELEASE_SIGNING_KEY_B64 }}
-        run: echo "RELEASE_PUBLIC_KEY_HEX=$(go run ./cmd/net-probe-release -print-public-key)" >> "$GITHUB_ENV"
       - name: Build agent linux amd64
         run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -gcflags=all=-l -ldflags "-s -w -buildid= -X main.version=${RELEASE_TAG} -X main.releasePublicKeyHex=${RELEASE_PUBLIC_KEY_HEX}" -o net-probe_linux_amd64 ./cmd/net-probe
       - name: Build agent linux arm64

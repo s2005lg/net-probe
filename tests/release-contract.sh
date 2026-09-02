@@ -14,11 +14,17 @@ contains LICENSE "Copyright (c) 2026 s2005lg"
 contains LICENSE "Permission is hereby granted, free of charge"
 not_contains README.md "v0.2.0"
 contains README.md "NET_PROBE_PANEL_VERSION=v0.1.0"
+contains README.md "节点 -> 添加 Agent"
+contains README.md "docs/release.md"
+contains docs/release.md "NET_PROBE_RELEASE_SIGNING_KEY_B64"
+contains docs/release.md "go run ./cmd/net-probe-release -generate-key"
+contains docs/release.md "Settings -> Secrets and variables -> Actions"
 contains .github/workflows/release.yml "sha256sum net-probe_linux_amd64 net-probe_linux_arm64 net-probe-update-helper_linux_amd64 net-probe-update-helper_linux_arm64 net-probe-panel_linux_amd64 net-probe-panel_linux_arm64 > SHA256SUMS"
 contains .github/workflows/release.yml "sha256sum --check SHA256SUMS"
 contains .github/workflows/release.yml "npm run verify"
 contains .github/workflows/release.yml "workflow_dispatch:"
 contains .github/workflows/release.yml "RELEASE_TAG:"
+contains .github/workflows/release.yml "Validate release signing key"
 contains .github/workflows/release.yml "git tag \"\$RELEASE_TAG\" \"\$GITHUB_SHA\""
 contains .github/workflows/release.yml "tag_name: \${{ env.RELEASE_TAG }}"
 contains .github/workflows/release.yml 'NET_PROBE_RELEASE_SIGNING_KEY_B64: ${{ secrets.NET_PROBE_RELEASE_SIGNING_KEY_B64 }}'
@@ -41,6 +47,12 @@ contains .github/workflows/release.yml "-gcflags=all=-l"
 contains tests/agent-size.sh 'candidate_size" -gt 7000000'
 contains tests/agent-size.sh 'gzip_size" -gt 3000000'
 contains tests/agent-size.sh 'growth" -gt 500000'
+
+validate_line="$(grep -n -- '- name: Validate release signing key' .github/workflows/release.yml | cut -d: -f1)"
+tag_line="$(grep -n -- '- name: Create release tag' .github/workflows/release.yml | cut -d: -f1)"
+if [ -z "$validate_line" ] || [ -z "$tag_line" ] || [ "$validate_line" -ge "$tag_line" ]; then
+  fail "release signing key must be validated before workflow_dispatch creates a tag"
+fi
 
 publish_files="$(awk '
   /^[[:space:]]*- name: Publish release$/ { in_publish = 1; next }

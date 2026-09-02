@@ -43,9 +43,9 @@ curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install-pane
 
 ### 2. 在 Panel 创建 Agent 注册命令
 
-进入“探针管理”，创建一次性注册码。注册码最长 10 分钟有效且只能消费一次。Panel 会生成包含以下固定值的完整命令：
+进入“节点 -> 添加 Agent”，选择平台并导入对应 GitHub Release 的签名发布，然后创建一次性注册码。注册码最长 10 分钟有效且只能消费一次。Panel 会生成包含以下固定值的完整命令：
 
-- 明确的 Release 版本，不接受 `latest`
+- 明确的 Release 版本，不接受 `latest` 或占位符
 - Panel HTTPS 地址
 - Panel CA 指纹
 - 一次性注册码
@@ -61,6 +61,8 @@ curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/install.sh |
        NET_PROBE_ENROLLMENT_CODE="<一次性注册码>" \
        NET_PROBE_RELEASE_PUBLIC_KEY_HEX="<64位小写十六进制公钥>" bash
 ```
+
+Release 签名私钥只配置在 GitHub Actions，生成和轮换步骤见 [Release signing](docs/release.md)。
 
 安装器会先下载并验证 Agent 与 root update helper 的签名清单、大小和 SHA-256，再在临时目录完成注册、首次上报和 mTLS WSS hello/welcome 预检。只有预检成功后才切换生产文件；失败不会替换旧部署。
 
@@ -106,7 +108,7 @@ sudo systemctl kill -s HUP net-probe.service
 
 ## 签名升级与回滚
 
-1. 在“探针管理”导入 GitHub Release 的 Agent manifest 与签名。
+1. 在“节点 -> 添加 Agent”导入 GitHub Release 的 Agent manifest 与签名。
 2. 确认版本、架构、哈希、有效期和最小 Panel 版本。
 3. 重新认证并选择目标 Agent。
 4. 查看命令历史中的 `queued`、`dispatched`、`accepted`、`running`、`succeeded`、`failed` 或 `expired`。

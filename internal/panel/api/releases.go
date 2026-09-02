@@ -1,17 +1,23 @@
 package api
 
 import (
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/s2005lg/net-probe/internal/controlproto"
 	"github.com/s2005lg/net-probe/internal/panel/auth"
 	npupdate "github.com/s2005lg/net-probe/internal/update"
 )
+
+var githubReleaseBase = "https://github.com/s2005lg/net-probe/releases/download"
+var githubHTTPClient = http.DefaultClient
 
 type releaseInput struct {
 	Manifest  npupdate.Manifest `json:"manifest"`
@@ -51,16 +57,73 @@ func (s *Server) handleImportRelease(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"code": "invalid_release"}})
 		return
 	}
-	manifestBody, _ := npupdate.ManifestBytes(input.Manifest)
-	result, err := s.db.ExecContext(r.Context(), `INSERT INTO agent_releases(manifest_json,signature,version,os,arch,size_bytes,sha256,imported_by_user_id,imported_at) VALUES(?,?,?,?,?,?,?,?,?)`,
-		string(manifestBody), input.Signature, input.Manifest.Version, input.Manifest.OS, input.Manifest.Arch,
-		input.Manifest.ByteSize, input.Manifest.SHA256, actor.UserID, time.Now().Unix())
+	id, importedAt, err := s.storeRelease(r.Context(), actor.UserID, input.Manifest, input.Signature)
 	if err != nil {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": map[string]any{"code": "release_exists"}})
 		return
 	}
-	id, _ := result.LastInsertId()
-	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "manifest": input.Manifest, "signature": input.Signature})
+	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "manifest": input.Manifest, "signature": input.Signature, "imported_at": importedAt})
+}
+
+func (s *Server) handleImportGitHubRelease(w http.ResponseWriter, r *http.Request) {
+	actor, ok := auth.ActorFromContext(r.Context())
+	if !ok || s.releaseKey == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": map[string]any{"code": "unavailable"}})
+		return
+	}
+	var input struct {
+		Version string `json:"version"`
+		OS      string `json:"os"`
+		Arch    string `json:"arch"`
+	}
+	if err := decodeStrictJSON(r.Body, &input); err != nil || !validReleaseRequest(input.Version, input.OS, input.Arch) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"code": "bad_request"}})
+		return
+	}
+	asset := "net-probe_" + input.OS + "_" + input.Arch
+	base := strings.TrimRight(githubReleaseBase, "/") + "/" + input.Version + "/" + asset
+	manifestBody, err := fetchReleaseFile(r, base+".manifest.json")
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": map[string]any{"code": "release_fetch_failed"}})
+		return
+	}
+	manifest, err := npupdate.DecodeManifest(manifestBody)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"code": "invalid_release"}})
+		return
+	}
+	signatureBody, err := fetchReleaseFile(r, base+".manifest.sig")
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": map[string]any{"code": "release_fetch_failed"}})
+		return
+	}
+	signatureText := strings.TrimSpace(string(signatureBody))
+	public, signature, err := s.releaseVerification(signatureText)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"code": "invalid_signature"}})
+		return
+	}
+	panelVersion := s.PanelVersion
+	if panelVersion == "" {
+		panelVersion = "v0.0.0"
+	}
+	if manifest.Version != input.Version || manifest.OS != input.OS || manifest.Arch != input.Arch {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"code": "invalid_release"}})
+		return
+	}
+	if err := npupdate.VerifyManifest(public, npupdate.SignedManifest{Manifest: manifest, Signature: signature}, npupdate.VerifyOptions{
+		CurrentVersion: "v0.0.0", PanelVersion: panelVersion, OS: input.OS, Arch: input.Arch,
+		ControlVersion: controlproto.Version, Now: time.Now(),
+	}); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{"code": "invalid_release"}})
+		return
+	}
+	id, importedAt, err := s.storeRelease(r.Context(), actor.UserID, manifest, signatureText)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": map[string]any{"code": "release_exists"}})
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{"id": id, "manifest": manifest, "signature": signatureText, "imported_at": importedAt})
 }
 
 func (s *Server) handleReleases(w http.ResponseWriter, r *http.Request) {
@@ -178,4 +241,66 @@ func (s *Server) releaseVerification(signatureText string) (ed25519.PublicKey, [
 		return nil, nil, errors.New("release signature invalid")
 	}
 	return public, signature, nil
+}
+
+func (s *Server) storeRelease(ctx context.Context, userID int64, manifest npupdate.Manifest, signature string) (int64, int64, error) {
+	importedAt := time.Now().Unix()
+	manifestBody, _ := npupdate.ManifestBytes(manifest)
+	result, err := s.db.ExecContext(ctx, `INSERT INTO agent_releases(manifest_json,signature,version,os,arch,size_bytes,sha256,imported_by_user_id,imported_at) VALUES(?,?,?,?,?,?,?,?,?)`,
+		string(manifestBody), signature, manifest.Version, manifest.OS, manifest.Arch,
+		manifest.ByteSize, manifest.SHA256, userID, importedAt)
+	if err != nil {
+		return 0, 0, err
+	}
+	id, err := result.LastInsertId()
+	return id, importedAt, err
+}
+
+func validReleaseRequest(version, goos, arch string) bool {
+	if goos != "linux" || (arch != "amd64" && arch != "arm64") {
+		return false
+	}
+	if len(version) < 6 || version[0] != 'v' {
+		return false
+	}
+	parts := strings.Split(version[1:], ".")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" || (len(part) > 1 && part[0] == '0') {
+			return false
+		}
+		for _, ch := range part {
+			if ch < '0' || ch > '9' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func fetchReleaseFile(r *http.Request, url string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	res, err := githubHTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return nil, errors.New("release file not found")
+	}
+	body, err := io.ReadAll(io.LimitReader(res.Body, 128*1024+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(body) > 128*1024 {
+		return nil, errors.New("release file is too large")
+	}
+	return body, nil
 }

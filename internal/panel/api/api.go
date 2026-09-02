@@ -54,6 +54,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("POST /api/v1/admin/agents/{id}/commands", s.requireRole(auth.Operator, s.handleCreateCommand))
 	mux.Handle("GET /api/v1/admin/releases", s.requireRole(auth.Viewer, s.handleReleases))
 	mux.Handle("POST /api/v1/admin/releases", s.requireRole(auth.Admin, s.handleImportRelease))
+	mux.Handle("POST /api/v1/admin/releases/github", s.requireRole(auth.Admin, s.handleImportGitHubRelease))
 	mux.Handle("POST /api/v1/admin/upgrades", s.requireRole(auth.Admin, s.handleCreateUpgrades))
 	mux.Handle("POST /api/v1/admin/enrollments", s.requireRole(auth.Admin, s.handleCreateEnrollment))
 	mux.Handle("POST /api/v1/admin/agents/{id}/revoke", s.requireRole(auth.Admin, s.handleRevokeAgent))

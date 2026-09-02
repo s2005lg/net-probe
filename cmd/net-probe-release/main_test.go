@@ -83,3 +83,23 @@ func TestRunReleaseSignerPrintsDerivedPublicKey(t *testing.T) {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
+
+func TestRunReleaseSignerGeneratesKeyPair(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"-generate-key"}, &stdout, &stderr, func(string) string { return "" })
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], "NET_PROBE_RELEASE_SIGNING_KEY_B64=") || !strings.HasPrefix(lines[1], "RELEASE_PUBLIC_KEY_HEX=") {
+		t.Fatalf("stdout=%q", stdout.String())
+	}
+	privateText := strings.TrimPrefix(lines[0], "NET_PROBE_RELEASE_SIGNING_KEY_B64=")
+	private, err := releasePrivateKey(privateText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hex.EncodeToString(private.Public().(ed25519.PublicKey)) != strings.TrimPrefix(lines[1], "RELEASE_PUBLIC_KEY_HEX=") {
+		t.Fatal("public key does not match private key")
+	}
+}

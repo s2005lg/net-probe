@@ -24,6 +24,8 @@ export default function NodesPage() {
   const [enrollmentLabel, setEnrollmentLabel] = useState("");
   const [agentPlatform, setAgentPlatform] = useState("linux/amd64");
   const [enrollmentBusy, setEnrollmentBusy] = useState(false);
+  const [releaseTag, setReleaseTag] = useState("");
+  const [releaseBusy, setReleaseBusy] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [view, setView] = useState<"table" | "cards">("table");
 
@@ -128,6 +130,20 @@ export default function NodesPage() {
     }
   }
 
+  async function importRelease() {
+    const [os, arch] = agentPlatform.split("/");
+    setReleaseBusy(true);
+    setError("");
+    try {
+      const imported = await api.importGitHubRelease({ version: releaseTag.trim(), os, arch });
+      setReleases((items) => [imported, ...items.filter((item) => item.id !== imported.id)]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setReleaseBusy(false);
+    }
+  }
+
   if (error) return <p className="text-danger">{error}</p>;
 
   return (
@@ -141,10 +157,14 @@ export default function NodesPage() {
           platform={agentPlatform}
           open={addingAgent}
           busy={enrollmentBusy}
+          releaseTag={releaseTag}
+          releaseBusy={releaseBusy}
           onOpen={() => setAddingAgent(true)}
           onClose={() => setAddingAgent(false)}
           onLabelChange={setEnrollmentLabel}
           onPlatformChange={setAgentPlatform}
+          onReleaseTagChange={setReleaseTag}
+          onImportRelease={() => void importRelease()}
           onCreate={() => void createEnrollment()}
         />
         <input
@@ -437,11 +457,15 @@ export function AddAgentPanel({
   platform = "linux/amd64",
   open = false,
   busy = false,
+  releaseTag = "",
+  releaseBusy = false,
   panelOrigin = typeof window === "undefined" ? "https://panel.example.invalid" : window.location.origin,
   onOpen,
   onClose,
   onLabelChange,
   onPlatformChange,
+  onReleaseTagChange,
+  onImportRelease,
   onCreate,
 }: {
   actor: SessionUser | null;
@@ -451,18 +475,22 @@ export function AddAgentPanel({
   platform?: string;
   open?: boolean;
   busy?: boolean;
+  releaseTag?: string;
+  releaseBusy?: boolean;
   panelOrigin?: string;
   onOpen?: () => void;
   onClose?: () => void;
   onLabelChange?: (value: string) => void;
   onPlatformChange?: (value: string) => void;
+  onReleaseTagChange?: (value: string) => void;
+  onImportRelease?: () => void;
   onCreate?: () => void;
 }) {
   if (actor?.role !== "admin") return null;
   const [os, arch] = platform.split("/");
   const release = releases.find((item) => item.manifest.os === os && item.manifest.arch === arch);
-  const version = release?.manifest.version ?? "<release-tag>";
-  const command = enrollment ? buildInstallCommand(panelOrigin, version, enrollment) : "";
+  const command = enrollment && release ? buildInstallCommand(panelOrigin, release.manifest.version, enrollment) : "";
+  const canCreateEnrollment = Boolean(release) && !busy;
 
   return (
     <>
@@ -480,59 +508,94 @@ export function AddAgentPanel({
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h2 className="font-head text-lg text-fg">添加 Agent</h2>
-                <p className="mt-1 text-sm text-muted">生成一条命令，在新 VPS 的 root shell 执行。</p>
+                <p className="mt-1 text-sm text-muted">选择平台，导入签名发布，再生成一次性安装命令。</p>
               </div>
               <button type="button" onClick={onClose} className="rounded border border-edge px-3 py-1.5 text-sm text-muted hover:text-fg">
                 关闭
               </button>
             </div>
-            <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_180px_auto]">
-              <label className="text-sm text-muted">
-                标签（可选）
-                <input
-                  value={label}
-                  maxLength={256}
-                  onChange={(event) => onLabelChange?.(event.target.value)}
-                  className="mt-1 min-h-11 w-full rounded border border-edge bg-surface px-3 py-2 text-fg outline-none focus-visible:ring-2 focus-visible:ring-ok"
-                />
-              </label>
-              <label className="text-sm text-muted">
-                平台
-                <select
-                  value={platform}
-                  onChange={(event) => onPlatformChange?.(event.target.value)}
-                  className="mt-1 min-h-11 w-full rounded border border-edge bg-surface px-3 py-2 text-fg outline-none focus-visible:ring-2 focus-visible:ring-ok"
-                >
-                  <option value="linux/amd64">linux/amd64</option>
-                  <option value="linux/arm64">linux/arm64</option>
-                </select>
-              </label>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={onCreate}
-                className="min-h-11 cursor-pointer self-end rounded bg-ok px-4 py-2 text-sm font-medium text-surface hover:opacity-90 disabled:cursor-wait disabled:opacity-50"
-              >
-                {busy ? "生成中…" : "生成安装命令"}
-              </button>
-            </div>
-            {!release ? (
-              <p className="mt-3 text-sm text-warn">尚未导入签名发布；生成命令后请把版本占位符替换为已发布 tag。</p>
-            ) : null}
-            {enrollment ? (
-              <div className="mt-4">
-                <p className="text-sm text-ok">有效至 {formatTime(enrollment.expires_at)}</p>
-                <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-all rounded bg-surface p-3 font-head text-xs leading-5 text-fg">{command}</pre>
-                <button
-                  type="button"
-                  onClick={() => void navigator.clipboard?.writeText(command)}
-                  className="mt-2 inline-flex min-h-11 cursor-pointer items-center gap-2 rounded border border-edge px-3 py-2 text-sm text-fg hover:border-ok focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ok"
-                >
-                  <Copy size={16} aria-hidden="true" />
-                  复制安装命令
-                </button>
-              </div>
-            ) : null}
+            <ol className="mt-4 space-y-4">
+              <li>
+                <p className="text-sm font-medium text-fg">1. 选择平台和 Release</p>
+                <div className="mt-2 grid gap-3 sm:grid-cols-[180px_1fr_auto]">
+                  <label className="text-sm text-muted">
+                    平台
+                    <select
+                      value={platform}
+                      onChange={(event) => onPlatformChange?.(event.target.value)}
+                      className="mt-1 min-h-11 w-full rounded border border-edge bg-surface px-3 py-2 text-fg outline-none focus-visible:ring-2 focus-visible:ring-ok"
+                    >
+                      <option value="linux/amd64">linux/amd64</option>
+                      <option value="linux/arm64">linux/arm64</option>
+                    </select>
+                  </label>
+                  <label className="text-sm text-muted">
+                    GitHub Release tag
+                    <input
+                      value={releaseTag}
+                      placeholder={release?.manifest.version ?? "v0.1.1"}
+                      onChange={(event) => onReleaseTagChange?.(event.target.value)}
+                      className="mt-1 min-h-11 w-full rounded border border-edge bg-surface px-3 py-2 text-fg outline-none focus-visible:ring-2 focus-visible:ring-ok"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    disabled={releaseBusy || !releaseTag.trim()}
+                    onClick={onImportRelease}
+                    className="min-h-11 cursor-pointer self-end rounded border border-edge px-4 py-2 text-sm text-fg hover:border-ok disabled:cursor-wait disabled:opacity-50"
+                  >
+                    {releaseBusy ? "导入中…" : "导入签名发布"}
+                  </button>
+                </div>
+                {release ? (
+                  <p className="mt-2 text-sm text-ok">已选择 {release.manifest.version} / {release.manifest.os}/{release.manifest.arch}</p>
+                ) : (
+                  <p className="mt-2 text-sm text-warn">尚未导入此平台的签名发布，不能生成安装命令。</p>
+                )}
+              </li>
+              <li>
+                <p className="text-sm font-medium text-fg">2. 生成一次性注册码</p>
+                <div className="mt-2 grid gap-3 sm:grid-cols-[1fr_auto]">
+                  <label className="text-sm text-muted">
+                    标签（可选）
+                    <input
+                      value={label}
+                      maxLength={256}
+                      onChange={(event) => onLabelChange?.(event.target.value)}
+                      className="mt-1 min-h-11 w-full rounded border border-edge bg-surface px-3 py-2 text-fg outline-none focus-visible:ring-2 focus-visible:ring-ok"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    disabled={!canCreateEnrollment}
+                    onClick={onCreate}
+                    className="min-h-11 cursor-pointer self-end rounded bg-ok px-4 py-2 text-sm font-medium text-surface hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {busy ? "生成中…" : "生成安装命令"}
+                  </button>
+                </div>
+              </li>
+              <li>
+                <p className="text-sm font-medium text-fg">3. 在新 VPS 执行</p>
+                {enrollment && command ? (
+                  <div className="mt-2">
+                    <p className="text-sm text-ok">有效至 {formatTime(enrollment.expires_at)}</p>
+                    <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-all rounded bg-surface p-3 font-head text-xs leading-5 text-fg">{command}</pre>
+                    <button
+                      type="button"
+                      onClick={() => void navigator.clipboard?.writeText(command)}
+                      className="mt-2 inline-flex min-h-11 cursor-pointer items-center gap-2 rounded border border-edge px-3 py-2 text-sm text-fg hover:border-ok focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ok"
+                    >
+                      <Copy size={16} aria-hidden="true" />
+                      复制安装命令
+                    </button>
+                    <p className="mt-2 text-xs text-muted">卸载命令：curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/main/uninstall.sh | sudo bash</p>
+                  </div>
+                ) : (
+                  <p className="mt-2 text-sm text-muted">生成后会显示完整命令。</p>
+                )}
+              </li>
+            </ol>
           </div>
         </div>
       ) : null}
@@ -541,9 +604,8 @@ export function AddAgentPanel({
 }
 
 function buildInstallCommand(origin: string, version: string, enrollment: Enrollment): string {
-  const releaseTag = /^v\d+\.\d+\.\d+$/.test(version) ? version : "<release-tag>";
   return [
-    `curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/${releaseTag}/install.sh | env \\`,
+    `curl -fsSL https://raw.githubusercontent.com/s2005lg/net-probe/${version}/install.sh | env \\`,
     `  NET_PROBE_PANEL_URL=${shellQuote(origin)} \\`,
     `  NET_PROBE_VERSION=${shellQuote(version)} \\`,
     `  NET_PROBE_CA_FINGERPRINT=${shellQuote(enrollment.ca_fingerprint)} \\`,

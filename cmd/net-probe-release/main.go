@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -25,6 +26,7 @@ func main() {
 func run(args []string, stdout, stderr io.Writer, getenv func(string) string) int {
 	flags := flag.NewFlagSet("net-probe-release", flag.ContinueOnError)
 	flags.SetOutput(stderr)
+	generateKey := flags.Bool("generate-key", false, "generate a release signing key and print the derived public key")
 	printPublic := flags.Bool("print-public-key", false, "print the release public key as lowercase hex")
 	artifactPath := flags.String("artifact", "", "release artifact path")
 	version := flags.String("version", "", "release semantic version")
@@ -36,6 +38,19 @@ func run(args []string, stdout, stderr io.Writer, getenv func(string) string) in
 	signaturePath := flags.String("signature", "", "detached signature output path")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
 		return 2
+	}
+	if *generateKey {
+		if *printPublic || *artifactPath != "" || *version != "" || *goos != "" || *arch != "" || *artifactURL != "" || *minimumPanel != "" || *manifestPath != "" || *signaturePath != "" {
+			fmt.Fprintln(stderr, "-generate-key cannot be combined with other flags")
+			return 2
+		}
+		public, private, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			fmt.Fprintln(stderr, "generate release signing key")
+			return 1
+		}
+		fmt.Fprintf(stdout, "%s=%s\nRELEASE_PUBLIC_KEY_HEX=%s\n", releaseKeyEnvironment, base64.StdEncoding.EncodeToString(private), hex.EncodeToString(public))
+		return 0
 	}
 	private, err := releasePrivateKey(getenv(releaseKeyEnvironment))
 	if err != nil {
